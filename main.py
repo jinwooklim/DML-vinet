@@ -27,6 +27,7 @@ import csv
 import time
 
 def toQuaternion(yaw, pitch, roll):
+    
     cy = np.cos(yaw * 0.5)
     sy = np.sin(yaw * 0.5)
     cr = np.cos(roll * 0.5)
@@ -38,7 +39,29 @@ def toQuaternion(yaw, pitch, roll):
     qx = cy * sr * cp - sy * cr * sp
     qy = cy * cr * sp + sy * sr * cp
     qz = sy * cr * cp - cy * sr * sp
-    return [qw,qx,qy,qx]
+    
+   
+    ''' 
+    c1 = np.cos(yaw * 0.5)
+    c2 = np.cos(pitch * 0.5)
+    c3 = np.cos(roll * 0.5)
+    s1 = np.sin(yaw * 0.5)
+    s2 = np.sin(pitch * 0.5)
+    s3 = np.sin(roll * 0.5)
+
+    qw = c1*c2*c2 - s1*s2*s3
+    qx = s1*s2*c3 + c1*c2*s3
+    qy = s1*c2*c3 + c1*s2*s3
+    qz = c1*s2*c3 - s1*c2*s3
+    '''
+
+    return [qw,qx,qy,qz]
+
+def xyz2Quaternion(x, y, z):
+    
+    
+
+    return [qw,qx,qy,qz]
 
 class MyDataset:
     
@@ -64,7 +87,7 @@ class MyDataset:
         #self.imu = self.readIMU_File('/imu0/data.csv')
         self.imu = self.readIMU_File(os.path.join("virtual_obd", sequence, "0.txt"))
         
-        self.imu_seq_len = 1
+        self.imu_seq_len = 3
    
     def read_R6TrajFile(self, path):
         traj = []
@@ -113,18 +136,15 @@ class MyDataset:
         batch_x = []
         batch_imu = []
         for i in range(batch):
-            image01 = Image.open(os.path.join(self.base_path_img, self.data_files[idx + i]))
-            image01 = image01.crop((200, 0, 1040, 375))
-            image02 = Image.open(os.path.join(self.base_path_img, self.data_files[idx+1 + i]))
-            image02 = image02.crop((200, 0, 1040, 375))
+            image01 = (Image.open(os.path.join(self.base_path_img, self.data_files[idx + i]))).crop((200, 0, 1040, 375))
+            image02 = (Image.open(os.path.join(self.base_path_img, self.data_files[idx+1 + i]))).crop((200, 0, 1040, 375))
             image01 = image01.resize((502, 376), resample=Image.BICUBIC)
             image02 = image02.resize((502, 376), resample=Image.BICUBIC)
-            #x_data_np_1 = np.array(Image.open(os.path.join(self.base_path_img, self.data_files[idx + i])))
-            #x_data_np_2 = np.array(Image.open(os.path.join(self.base_path_img, self.data_files[idx+1 + i])))
+            
             x_data_np_1 = np.array(image01)
             x_data_np_2 = np.array(image02)
-
-            ## 3 channels
+            
+            # 3 channel
             #x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
             #x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2])
             X = np.array([x_data_np_1, x_data_np_2])
@@ -155,7 +175,7 @@ class Vinet(nn.Module):
         super(Vinet, self).__init__()
         self.rnn = nn.LSTM(
             input_size=49161, #49152,#24576, 
-            hidden_size=1024,#64, 
+            hidden_size=1024, #64, 
             num_layers=2,
             batch_first=True)
         self.rnn.cuda()
@@ -224,23 +244,25 @@ class Vinet(nn.Module):
         return l_out2
     
     
-def model_out_to_flow_png(output):
-    out_np = output[0].data.cpu().numpy()
-
+def model_out_to_flow_png(output, name):
+    out_np = output
+    print(np.shape(out_np))
     #https://gitorchub.com/DediGadot/PatchBatch/blob/master/flowlib.py
     out_np = np.squeeze(out_np)
-    out_np = np.moveaxis(out_np,0, -1)
+    print(np.shape(out_np))
+    #out_np = np.moveaxis(out_np, 0, -1)
 
     im_arr = flowlib.flow_to_image(out_np)
     im = Image.fromarray(im_arr)
-    im.save('test.png')
+    im.save("%s.png"%name)
 
 
 def train():
     epoch = 10
     batch = 1
     model = Vinet()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.SGD(model.parameters(), lr=0.0001, momentum=0.9)
     #optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
     writer = SummaryWriter()
@@ -289,7 +311,6 @@ def train():
                 ## (F2F loss) + (Global pose loss)
                 ## Global pose: Full concatenated pose relative to the start of the sequence
                 loss = criterion(output, target_f2f) + criterion(abs_traj_input, target_global)
-
                 loss.backward()
                 optimizer.step()
 
