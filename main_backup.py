@@ -87,9 +87,15 @@ class MyDataset:
                 
         return np.array(imu)
 
+    '''
     def getTrajectoryAbs(self, idx):
         return self.trajectory_abs[idx]
-    
+    '''
+
+    def getTrajectoryAbs(self, idx, batch):
+        return np.asarray([self.trajectory_abs[idx+f] for f in range(batch)])
+        
+
     def getTrajectoryAbsAll(self):
         return self.trajectory_abs
     
@@ -199,10 +205,9 @@ class Vinet(nn.Module):
         #cat_out = torch.cat((r_in, imu_out), 2)#1 1 49158
         #cat_out = torch.cat((cat_out, xyzQ), 2)#1 1 49165
         cat_out = torch.cat((r_in, imu_out), 2)#1 1 49158
-        #print("cat_out : ", np.shape(cat_out))
-        #print("xyzQ : ", np.shape(xyzQ))
+        print("cat_out : ", np.shape(cat_out))
+        print("xyzQ : ", np.shape(xyzQ))
         cat_out = torch.cat((cat_out, xyzQ), 2)#1 1 49165
-        #print(np.shape(cat_out))
         r_out, (h_n, h_c) = self.rnn(cat_out)
         l_out1 = self.linear1(r_out[:,-1,:])
         l_out2 = self.linear2(l_out1)
@@ -265,13 +270,11 @@ def train():
                    
                 if i == start:
                     ## load first SE3 pose xyzQuaternion
-                    abs_traj = mydataset.getTrajectoryAbs(start)
-                    abs_traj_input = np.expand_dims(abs_traj, axis=0) # (1,7)
-                    abs_traj_input = np.expand_dims(abs_traj_input, axis=0) # (1,1,7)
-                    abs_traj_input = np.tile(abs_traj_input, (batch,1,1)) # (4,1,7)
+                    abs_traj = mydataset.getTrajectoryAbs(start, batch) # (batch, 7)
+                    abs_traj_input = np.expand_dims(abs_traj, axis=1) # (batch, 1, 7)
+                    #abs_traj_input = np.expand_dims(abs_traj_input, axis=0) # (1, 1, batch, 7)
+                    #abs_traj_input = np.tile(abs_traj_input, (batch,1,1)) # (4,1,7)
                     abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) 
-                    
-                    abs_traj_batch = np.tile(abs_traj, (batch,1)) ########### Using for SE part
 
                 ## Forward
                 output = model(data, data_imu, abs_traj_input)
@@ -282,14 +285,12 @@ def train():
                 ## SE part 
                 abs_traj_list = []
                 for idx in range(batch):
-                    abs_traj_temp = se3qua.accu(abs_traj_batch[idx,...], numarr[idx,...])
+                    abs_traj_temp = se3qua.accu(abs_traj[idx,...], numarr[idx,...])
                     abs_traj_list.append(abs_traj_temp)
-                abs_traj_batch = np.asarray(abs_traj_batch)
+                abs_traj = np.asarray(abs_traj_list) # (4,7)
                  
-                abs_traj_input = np.expand_dims(abs_traj, axis=0)
-                abs_traj_input = np.expand_dims(abs_traj_input, axis=0)
-                abs_traj_input = np.tile(abs_traj_input, (batch,1,1))
-                abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) 
+                abs_traj_input = np.expand_dims(abs_traj, axis=1)
+                abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) # (batch,1,7)
 
                 ## (F2F loss) + (Global pose loss)
                 ## Global pose: Full concatenated pose relative to the start of the sequence
