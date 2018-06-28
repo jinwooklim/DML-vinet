@@ -39,29 +39,11 @@ def toQuaternion(yaw, pitch, roll):
     qx = cy * sr * cp - sy * cr * sp
     qy = cy * cr * sp + sy * sr * cp
     qz = sy * cr * cp - cy * sr * sp
-    
-   
-    ''' 
-    c1 = np.cos(yaw * 0.5)
-    c2 = np.cos(pitch * 0.5)
-    c3 = np.cos(roll * 0.5)
-    s1 = np.sin(yaw * 0.5)
-    s2 = np.sin(pitch * 0.5)
-    s3 = np.sin(roll * 0.5)
 
-    qw = c1*c2*c2 - s1*s2*s3
-    qx = s1*s2*c3 + c1*c2*s3
-    qy = s1*c2*c3 + c1*s2*s3
-    qz = c1*s2*c3 - s1*c2*s3
-    '''
+    #print(qw, qx, qy, qz)    
 
     return [qw,qx,qy,qz]
 
-def xyz2Quaternion(x, y, z):
-    
-    
-
-    return [qw,qx,qy,qz]
 
 class MyDataset:
     
@@ -94,7 +76,8 @@ class MyDataset:
         with open(os.path.join(self.base_dir, path)) as csvfile:
             spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
             for row in spamreader:
-                parsed = [float(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])]
+                #parsed = [float(row[0]), float(row[1]), float(row[2]), -float(row[3]), float(row[4]), float(row[5])]
+                parsed = [float(row[2]), -float(row[0]), float(row[1]), -float(row[3]), float(row[4]), float(row[5])]
                 traj.append(parsed)
         return np.array(traj)
 
@@ -104,8 +87,8 @@ class MyDataset:
             spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
             for row in spamreader:
                 # x, y, z, yaw, pitch, roll -> x, y, z, ww, wx, wy, wz
-                quaternion = toQuaternion(float(row[3]), float(row[4]), float(row[5]))
-                parsed = [float(row[0]), float(row[1]), float(row[2]), 
+                quaternion = toQuaternion(-float(row[3]), float(row[4]), float(row[5]))
+                parsed = [float(row[2]), -float(row[0]), float(row[1]), 
                 quaternion[0], quaternion[1], quaternion[2], quaternion[3]]
                 traj.append(parsed)
         return np.array(traj)
@@ -302,7 +285,7 @@ def train():
                 ## Accumulate pose
                 numarr = output.data.cpu().numpy()
                 
-                abs_traj = se3qua.accu(abs_traj, numarr)
+                abs_traj = se3qua.accu(abs_traj, numarr) # abs_traj : 7, numarr : 6
                 
                 abs_traj_input = np.expand_dims(abs_traj, axis=0)
                 abs_traj_input = np.expand_dims(abs_traj_input, axis=0)
@@ -391,7 +374,6 @@ def test():
         abs_traj = Variable(torch.from_numpy(abs_traj).type(torch.FloatTensor).cuda()) 
         
         ans.append(xyzq)
-        print(xyzq)
         print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
         
         
