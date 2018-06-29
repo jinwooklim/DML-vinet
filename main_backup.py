@@ -93,7 +93,15 @@ class MyDataset:
     '''
 
     def getTrajectoryAbs(self, idx, batch, timesteps):
-        return np.asarray([self.trajectory_abs[idx+(f * timesteps)] for f in range(batch)]) # all has same [idx] value
+        #return np.asarray([self.trajectory_abs[idx+(f * timesteps)] for f in range(batch)]) # all has same [idx] value
+        return_list = []
+        for b in range(batch):
+            temp_list = []
+            for t in range(timesteps):
+                temp = self.trajectory_abs[idx+(b*timesteps)+t]
+                temp_list.append(temp)
+            return_list.append(np.asarray(temp_list))
+        return np.asarray(return_list)
         
 
     def getTrajectoryAbsAll(self):
@@ -181,7 +189,7 @@ class Vinet(nn.Module):
         self.timesteps = timesteps
 
         self.rnn = nn.LSTM(
-            input_size= 12301, #49152,#24576, 
+            input_size=49189, #12301, #49152,#24576, 
             hidden_size=1024,#64, 
             num_layers=2,
             batch_first=True)
@@ -218,35 +226,27 @@ class Vinet(nn.Module):
          
         ## Input1: Feed image pairs to FlownetC
         ##c_in = image.view(batch_size, timesteps * C, H, W)
+        ## TODO
         c_out_list = []
-        for idx_b in range(batch_size):
-            each_batch_image = image[idx_b,...]
-            c_in = each_batch_image.view(timesteps, 2 * C, H, W)
+        for b in range(batch_size):
+            b_image = image[b, ...]
+            c_in = b_image.view(timesteps, 2 * C, H, W)
             c_out = self.flownet_c(c_in)
             c_out_list.append(c_out)
-        c_out = torch.stack(c_out)
-         
+        c_out = torch.stack(c_out_list)
+
         ## Input2: Feed IMU records to LSTM
-        imu_out_list = []
-        for idx_b in range(batch_size):
-            each_batch_imu = imu[idx_b,...]
-            imu_out, (imu_n, imu_c) = self.rnnIMU(each_batch_imu)
-            imu_out = imu_out[:, -1, :]
-            imu_out = imu_out.unsqueeze(1)
-            imu_out_list.append(imu_out)
-        imu_out = torch.stack(imu_out_list)
-        imu_out = imu_out.view(batch_size, timesteps, -1) # (batch, timesteps, 6)
+        imu_out = imu.view(batch_size, timesteps, -1) # (batch, timesteps, 6)
         
         ## Combine the output of input1 and 2 and feed it to LSTM
         ##r_in = c_out.view(batch_size, timesteps, -1)
-        r_in = c_out.view(batch_size, timesteps, -1) # (batch, timesteps, 24576)
-        cat_out = torch.cat((r_in, imu_out), 2) # (batch, timesteps, input_size)
-        xyzQ = xyzQ.repeat(1, timesteps, 1) # (batch, timesteps, 7)
-        cat_out = torch.cat((cat_out, xyzQ), 2) # (batch_size, timesteps, input_size)
+        r_in = c_out.view(batch_size, timesteps, -1) # (batch, timesteps, 49152)
+        cat_out = torch.cat((r_in, imu_out), 2) # (batch, timesteps, ?)
+        cat_out = torch.cat((cat_out, xyzQ), 2) # (batch_size, timesteps, ??)
         
         ## Feed concatenate data to Main LSTM stream
-        print("Main LSTM stream input size : ", cat_out.shape)
-        r_out, (h_n, h_c) = self.rnn(cat_out) # (batch_size, timesteps, 1024)
+        #print("Main LSTM stream input size : ", cat_out.shape)
+        r_out, (h_n, h_c) = self.rnn(cat_out) # r_out : (batch_size, timesteps, 1024)
         l_out1 = self.linear1(r_out) # (batch_size, timesteps, 128)
         l_out2 = self.linear2(l_out1) # (batch_size, timesteps, 6)
         return l_out2
@@ -265,12 +265,12 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 20
-    batch = 4
-    timesteps = 1
+    epoch = 50
+    batch = 1
+    timesteps = 4
     model = Vinet(batch=batch, timesteps=timesteps)
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    #optimizer = optim.Adam(model.parameters(), lr = 0.001)
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
     writer = SummaryWriter()
     
@@ -312,8 +312,8 @@ def train():
                 
                 if i == start:
                     ## load first SE3 pose xyzQuaternion
-                    abs_traj = mydataset.getTrajectoryAbs(start, batch, timesteps) # (batch, 7)
-                    abs_traj_input = np.expand_dims(abs_traj, axis=1) # (batch, 1, 7)
+                    abs_traj = mydataset.getTrajectoryAbs(start, batch, timesteps) # (batch, timesteps, 7)
+                    abs_traj_input = abs_traj
                     abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) 
 
                 ## Forward
@@ -321,14 +321,17 @@ def train():
                  
                 ## Accumulate pose
                 numarr = output.data.cpu().numpy() # T0, T1 ... Tk
-              
+                
                 ## SE part
                 abs_traj_list = []
-                for idx_b in range(batch):
-                    abs_traj_temp = se3qua.accu(abs_traj[idx_b, ...], numarr[idx_b, ...])
-                    abs_traj_list.append(abs_traj_temp)
-                abs_traj = np.asarray(abs_traj_list) # (4,7)
-                abs_traj_input = np.expand_dims(abs_traj, axis=1)
+                for b in range(batch):
+                    step_list = []
+                    for t in range(timesteps):
+                        abs_traj_temp = se3qua.accu(abs_traj[b, t, ...], numarr[b, t, ...])
+                        step_list.append(abs_traj_temp)
+                    abs_traj_list.append(np.asarray(step_list)) # (2,7)
+                abs_traj = np.asarray(abs_traj_list) # (4,2,6)
+                abs_traj_input = abs_traj
                 abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) # (batch,1,7)
 
                 ## (F2F loss) + (Global pose loss)
