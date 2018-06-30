@@ -28,6 +28,213 @@ import time
 
 
 
+class SE3Comp(nn.Module):
+    def __init__(self):
+        super(SE3Comp, self).__init__()
+        self.threshold_square = 1e-1
+        self.threshold_cube = 1e-1
+    
+    def forward(self, Tg, xi):
+        """
+        Tg: <Torch.tensor> SE(3) R^7 (x, y, z, ww, wx, wy, wz)
+            Tg = torch.zeros(batchSize, 7, 1)
+        xi: <Torch.tensor> se(3) R^6 (rho1, rho2, rho3, omega_x, omega_y, omega_z)
+            xi_vec = torch.zeros(batchSize, 6, 1)
+        return Composed SE(3) in R^7 format
+        """
+        assert isinstance(Tg, type(torch.zeros(1))),'Tg with wrong datatype, should be torch.Tensor'
+        assert isinstance(xi, type(torch.zeros(1))),'Tg with wrong datatype, should be torch.Tensor'
+
+        
+        rho   = xi[:, 0:3]
+        omega = xi[:, 3:6] #torch.Size([batchSize, 3, 1])
+        batchSize = xi.size()[0]
+        
+        R, V = self.so3_RV(torch.squeeze(omega))
+        Txi = torch.zeros(batchSize,4,4)
+        Txi[:, 0:3, 0:3] = R
+        Txi[:, 3,3] = 1.0
+        Txi[:, 0:3, 3] = torch.squeeze(torch.bmm(V, rho))
+        
+        Tg_matrix = torch.zeros(batchSize,4,4)
+        Tg_matrix[:, 3, 3] = 1.0
+        q = Tg[:, 3:7]
+        Tg_matrix[:, 0:3, 0:3] = self.q_to_Matrix(q)
+        Tg_matrix[:, 0, 3] = torch.squeeze(Tg[:, 0])
+        Tg_matrix[:, 1, 3] = torch.squeeze(Tg[:, 1])
+        Tg_matrix[:, 2, 3] = torch.squeeze(Tg[:, 2])
+        T_combine_M = torch.bmm(Txi, Tg_matrix)
+        
+        return self.batchMtoR7(T_combine_M)
+    
+    def batchMtoR7(self,M):
+        batchSize = M.size()[0]
+        cat = None
+        for i in range(batchSize):
+            a = self.MtoR7(M[i])
+            if i == 0:
+                cat = torch.unsqueeze(a, dim=0)
+                continue
+            cat = torch.cat([cat,torch.unsqueeze(a, dim=0)])
+            
+        return cat
+    
+    def MtoR7(self,M):#no batch
+        R7 = torch.zeros(7,1)
+        #print(M[0,3].size())
+        #print(R7[0].size())
+        R7[0] = M[ 0, 3] # [2] to [2, 1]
+        R7[1] = M[ 1, 3] # [2] to [2, 1]
+        R7[2] = M[ 2, 3] # [2] to [2, 1]
+        #https://d3cw3dd2w32x2b.cloudfront.net/wp-content/uploads/2015/01/matrix-to-quat.pdf
+        t = 0
+        if M[2, 2] < 0:
+            if M[0, 0] > M[1, 1]:#
+                t = 1 + M[0, 0] - M[1, 1] - M[2, 2]
+                q = [M[2, 1]-M[1, 2],  t,  M[0, 1]+M[1, 0],  M[2, 0]+M[0, 2]]
+            else:#
+                t = 1 - M[0, 0] + M[1, 1] - M[2, 2]
+                q = [M[0, 2]-M[2, 0],  M[0, 1]+M[1, 0],  t,  M[1, 2]+M[2, 1]]
+        else:
+            if M[0, 0] < -M[1, 1]:#
+                t = 1 - M[0, 0] - M[1, 1] + M[2, 2]
+                q = [M[1, 0]-M[0, 1],  M[2, 0]+M[0, 2],  M[1, 2]+M[2, 1],  t]
+            else:#
+                t = 1 + M[0, 0] + M[1, 1] + M[2, 2]
+                q = [t,  M[2, 1]-M[1, 2],  M[0, 2]-M[2, 0],  M[1, 0]-M[0, 1]]
+        R7[3], R7[4], R7[5], R7[6] = q
+        R7[3] *= 0.5 / torch.sqrt(t)
+        R7[4] *= 0.5 / torch.sqrt(t)
+        R7[5] *= 0.5 / torch.sqrt(t)
+        R7[6] *= 0.5 / torch.sqrt(t)
+        if R7[3] < 0:
+            R7[3] *= -1
+            R7[4] *= -1
+            R7[5] *= -1
+            R7[6] *= -1
+        return R7
+        
+    def q_to_Matrix(self, q):
+        qw = q[:, 0]
+        qx = q[:, 1]
+        qy = q[:, 2]
+        qz = q[:, 3]
+        M = torch.zeros(q.size()[0], 3, 3)
+
+        M[:, 0, 0] = torch.squeeze( 1 - 2*torch.mul(qy,qy) - 2*torch.mul(qz,qz) )
+        M[:, 1, 0] = torch.squeeze( 2*torch.mul(qx,qy) + 2*torch.mul(qz,qw) )
+        M[:, 2, 0] = torch.squeeze( 2*torch.mul(qx,qz) - 2*torch.mul(qy,qw) )
+
+        M[:, 0, 1] = torch.squeeze( 2*torch.mul(qx,qy) - 2*torch.mul(qz,qw) )
+        M[:, 1, 1] = torch.squeeze( 1 - 2*torch.mul(qx,qx) - 2*torch.mul(qz,qz) )
+        M[:, 2, 1] = torch.squeeze( 2*torch.mul(qy,qz) + 2*torch.mul(qx,qw) )
+
+        M[:, 0, 2] = torch.squeeze( 2*torch.mul(qx,qz) + 2*torch.mul(qy,qw) )
+        M[:, 1, 2] = torch.squeeze( 2*torch.mul(qy,qz) - 2*torch.mul(qx,qw) )
+        M[:, 2, 2] = torch.squeeze( 1 - 2*torch.mul(qx,qx) - 2*torch.mul(qy,qy) )
+    
+        return M
+    
+    def so3_RV(self, omega):
+        """
+        (3-tuple)
+        omega = torch.zeros(batchSize, 3)
+
+        return batchx3x3 matrix R after exponential mapping, V
+        """
+        batchSize = omega.size()[0]
+        omega_x = omega[:, 0]
+        omega_y = omega[:, 1]
+        omega_z = omega[:, 2]
+
+        #paramIndex = paramIndex + 3
+        omega_skew = torch.zeros(batchSize,3,3)
+        """
+        0    -oz  oy  0
+        oz   0   -ox  0
+        -oy  ox   0   0
+        0    0    0   0
+        """
+        omega_skew[:, 1, 0] = omega_z.clone()
+        omega_skew[:, 2, 0] = -1 * omega_y
+
+        omega_skew[:, 0, 1] = -1 * omega_z
+        omega_skew[:, 2, 1] = omega_x.clone()
+
+        omega_skew[:, 0, 2] = omega_y.clone()
+        omega_skew[:, 1, 2] = -1 * omega_x
+
+        omega_skew_sqr = torch.bmm(omega_skew,omega_skew)
+        theta_sqr = torch.pow(omega_x,2) +\
+                    torch.pow(omega_y,2) +\
+                    torch.pow(omega_z,2)
+        theta = torch.pow(theta_sqr,0.5)
+        theta_cube = torch.mul(theta_sqr, theta)#
+        sin_theta = torch.sin(theta)
+        sin_theta_div_theta = torch.div(sin_theta,theta)
+
+        one_minus_cos_theta = torch.ones(theta.size()) - torch.cos(theta)
+        one_minus_cos_div_theta_sqr = torch.div(one_minus_cos_theta,theta_sqr)
+
+        theta_minus_sin_theta = theta - torch.sin(theta)
+        theta_minus_sin_div_theta_cube = torch.div(theta_minus_sin_theta, theta_cube)
+
+        sin_theta_div_theta_tensor            = torch.ones(omega_skew.size())
+        one_minus_cos_div_theta_sqr_tensor    = torch.ones(omega_skew.size())
+        theta_minus_sin_div_theta_cube_tensor = torch.ones(omega_skew.size())
+        
+        # sin_theta_div_theta do not need linear approximation
+        sin_theta_div_theta_tensor = sin_theta_div_theta
+        for b in range(batchSize):
+            if theta_sqr[b] > self.threshold_square:
+                one_minus_cos_div_theta_sqr_tensor[b] = one_minus_cos_div_theta_sqr[b]
+            elif theta_sqr[b] < 1e-6:
+                one_minus_cos_div_theta_sqr_tensor[b] = 0.5
+            else:#Taylor expansion
+                c = 1.0 / 2.0
+                c += theta[b]**(4*1) / 720.0#np.math.factorial(6) 
+                c += theta[b]**(4*2) / 3628800.0#np.math.factorial(6+4) 
+                c -= theta[b]**(2) / 24.0#np.math.factorial(4) 
+                c -= theta[b]**(2 + 4) / 40320.0#np.math.factorial(4+4) 
+                one_minus_cos_div_theta_sqr_tensor[b] = c
+                
+            if theta_cube[b] > self.threshold_cube:
+                theta_minus_sin_div_theta_cube_tensor[b] = theta_minus_sin_div_theta_cube[b]
+            elif theta_sqr[b] < 1e-6:
+                theta_minus_sin_div_theta_cube_tensor[b] = 1.0 / 6.0
+            else:#Taylor expansion
+                s = 1.0 / 6.0
+                s += theta[b]**(4*1) / 5040.0
+                s += theta[b]**(4*2) / 39916800.0
+                s -= theta[b]**(2) / 120.0
+                s -= theta[b]**(2 + 4) / 362880.0
+                theta_minus_sin_div_theta_cube_tensor[b] = s
+
+        completeTransformation = torch.zeros(batchSize,3,3)
+
+        completeTransformation[:, 0, 0] += 1
+        completeTransformation[:, 1, 1] += 1
+        completeTransformation[:, 2, 2] += 1   
+        completeTransformation = completeTransformation +\
+            torch.mul(sin_theta_div_theta_tensor,omega_skew) +\
+            torch.mul(one_minus_cos_div_theta_sqr_tensor, omega_skew_sqr)
+
+
+        V = torch.zeros(batchSize,3,3)    
+        V[:, 0, 0] += 1
+        V[:, 1, 1] += 1
+        V[:, 2, 2] += 1 
+        V = V + torch.mul(one_minus_cos_div_theta_sqr_tensor, omega_skew) +\
+            torch.mul(theta_minus_sin_div_theta_cube_tensor, omega_skew_sqr)
+        return completeTransformation, V
+    
+
+            
+            
+            
+
+
+
 class MyDataset:
     
     def __init__(self, base_dir, sequence):
@@ -92,17 +299,12 @@ class MyDataset:
         return self.trajectory_abs[idx]
     '''
 
-    def getTrajectoryAbs(self, idx, batch, timesteps):
-        #return np.asarray([self.trajectory_abs[idx+(f * timesteps)] for f in range(batch)]) # all has same [idx] value
+    def getTrajectoryAbs(self, idx, batch):
         return_list = []
         for b in range(batch):
-            temp_list = []
-            for t in range(timesteps):
-                temp = self.trajectory_abs[idx+(b*timesteps)+t]
-                temp_list.append(temp)
-            return_list.append(np.asarray(temp_list))
-        return np.asarray(return_list)
-        
+            batch_first_trajectory = self.trajectory_abs[idx+b]
+            return_list.append(batch_first_trajectory)
+        return np.asarray(return_list) # (batch, 7, 1)
 
     def getTrajectoryAbsAll(self):
         return self.trajectory_abs
@@ -113,83 +315,48 @@ class MyDataset:
     def __len__(self):
         return len(self.trajectory_relative)
     
-    def load_img_bat(self, idx, batch, timesteps):
-        batch_X = []
-        batch_X2 = []
-        batch_Y = []
-        batch_Y2 = []
-        
+    def load_img_bat(self, idx, batch):
+        batch_x = []
+        batch_imu =[]
         for batch_idx in range(batch):
-            timesteps_x = []
-            timesteps_imu = []
-            #print("batch : ", batch_idx)
-            for timestep_idx in range(timesteps):
-                #print("img_idx : ", idx + timestep_idx, idx+1 + timestep_idx)
-                x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx + timestep_idx]))
-                x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1 + timestep_idx]))
+            #print("### batch_idx ###")
+            #print("img_idx : ", idx + batch_idx, idx+1 + batch_idx)
+            x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx + batch_idx]))
+            x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1 + batch_idx]))
 
-                ## 3 channels
-                x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
-                x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2])
+            ## 3 channels
+            x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
+            x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2])
 
-                X = np.array([x_data_np_1, x_data_np_2])
-                timesteps_x.append(X)
-                
-                #print("IMU_idx : ", idx-self.imu_seq_len+1+timestep_idx, idx+1+timestep_idx)
-                tmp = np.array(self.imu[idx-self.imu_seq_len+1+timestep_idx : idx+1+timestep_idx])
-                timesteps_imu.append(tmp)
+            X = np.array([x_data_np_1, x_data_np_2])
+            batch_x.append(X)
+
+            #print("IMU_idx : ", idx-self.imu_seq_len+1+batch_idx, idx+1+batch_idx)
+            tmp = np.array(self.imu[idx-self.imu_seq_len+batch_idx : idx+1+batch_idx])
+            batch_imu.append(tmp)
+        
+        batch_x = np.array(batch_x)
+        batch_imu = np.array(batch_imu)
             
-            idx = idx + timesteps
+        X = Variable(torch.from_numpy(batch_x).type(torch.FloatTensor).cuda())    
+        X2 = Variable(torch.from_numpy(batch_imu).type(torch.FloatTensor).cuda())    
 
-            timesteps_x = np.array(timesteps_x)
-            timesteps_imu = np.array(timesteps_imu)
-        
-            #X = Variable(torch.from_numpy(timesteps_x).type(torch.FloatTensor).cuda())    
-            #X2 = Variable(torch.from_numpy(timesteps_imu).type(torch.FloatTensor).cuda())    
-            X = timesteps_x
-            X2 = timesteps_imu
              
-            ## F2F gt
-            #Y = Variable(torch.from_numpy(self.trajectory_relative[idx+1:idx+1+timesteps]).type(torch.FloatTensor).cuda())
-            Y = self.trajectory_relative[idx+1 : idx+1+timesteps]
+        ## F2F gt
+        Y = Variable(torch.from_numpy(self.trajectory_relative[idx+1 : idx+1+batch]).type(torch.FloatTensor).cuda())
 
-            ## global pose gt
-            #Y2 = Variable(torch.from_numpy(self.trajectory_abs[idx+1:idx+1+timesteps]).type(torch.FloatTensor).cuda())
-            Y2 = self.trajectory_abs[idx+1 : idx+1+timesteps]
-
-            batch_X.append(X)
-            batch_X2.append(X2)
-            batch_Y.append(Y)
-            batch_Y2.append(Y2)
+        ## global pose gt
+        Y2 = Variable(torch.from_numpy(self.trajectory_abs[idx+1 : idx+1+batch]).type(torch.FloatTensor).cuda())
         
-        batch_X = np.asarray(batch_X)
-        batch_X2 = np.asarray(batch_X2)
-        batch_Y = np.asarray(batch_Y)
-        batch_Y2 = np.asarray(batch_Y2)
-
-        batch_X = Variable(torch.from_numpy(batch_X).type(torch.FloatTensor).cuda())
-        batch_X2 = Variable(torch.from_numpy(batch_X2).type(torch.FloatTensor).cuda())
-        batch_Y = Variable(torch.from_numpy(batch_Y).type(torch.FloatTensor).cuda())
-        batch_Y2 = Variable(torch.from_numpy(batch_Y2).type(torch.FloatTensor).cuda())
-        
-        #print(batch_X.shape)
-        #print(batch_X2.shape)
-        #print(batch_Y.shape)
-        #print(batch_Y2.shape)
-        #exit()
-        return batch_X, batch_X2, batch_Y, batch_Y2 #return X, X2, Y, Y2
+        return X, X2, Y, Y2
 
     
     
 class Vinet(nn.Module):
-    def __init__(self, batch, timesteps):
+    def __init__(self, batch):
         super(Vinet, self).__init__()
-
-        self.batch = batch
-        self.timesteps = timesteps
-
         self.rnn = nn.LSTM(
-            input_size=49189, #12301, #49152,#24576, 
+            input_size=49158, #12301, #49152,#24576, 
             hidden_size=1024,#64, 
             num_layers=2,
             batch_first=True)
@@ -221,34 +388,35 @@ class Vinet(nn.Module):
         self.flownet_c.load_state_dict(checkpoint['state_dict'])
         self.flownet_c.cuda()
 
-    def forward(self, image, imu, xyzQ):
-        batch_size, timesteps, _, C, H, W = image.size() # [batch, timesteps, 2, channel, Height, Width]
+    def forward(self, image, imu):
+        batch_size, timesteps, C, H, W = image.size() # [batch, timesteps, channel, Height, Width]
          
         ## Input1: Feed image pairs to FlownetC
         ##c_in = image.view(batch_size, timesteps * C, H, W)
-        ## TODO
-        c_out_list = []
-        for b in range(batch_size):
-            b_image = image[b, ...]
-            c_in = b_image.view(timesteps, 2 * C, H, W)
-            c_out = self.flownet_c(c_in)
-            c_out_list.append(c_out)
-        c_out = torch.stack(c_out_list)
+        c_in = image.view(batch_size, timesteps * C, H, W)
+        c_out = self.flownet_c(c_in)
 
         ## Input2: Feed IMU records to LSTM
-        imu_out = imu.view(batch_size, timesteps, -1) # (batch, timesteps, 6)
+        imu_out, (imu_n, imu_c) = self.rnnIMU(imu)
+        #imu_out = imu.view(batch_size, 1, -1)
+        imu_out = imu_out[:, -1, :] # (batch, 6)
+        #print("imu_out : ", imu_out.shape)
+        imu_out = imu_out.unsqueeze(1) # (batch, 1, 6)
+        #print("imu_out : ", imu_out.shape)
         
         ## Combine the output of input1 and 2 and feed it to LSTM
         ##r_in = c_out.view(batch_size, timesteps, -1)
-        r_in = c_out.view(batch_size, timesteps, -1) # (batch, timesteps, 49152)
+        r_in = c_out.view(batch_size, 1, -1) # (batch, timesteps, 49152)
         cat_out = torch.cat((r_in, imu_out), 2) # (batch, timesteps, ?)
-        cat_out = torch.cat((cat_out, xyzQ), 2) # (batch_size, timesteps, ??)
+        #print("cat_out : ", cat_out.shape)
         
         ## Feed concatenate data to Main LSTM stream
         #print("Main LSTM stream input size : ", cat_out.shape)
-        r_out, (h_n, h_c) = self.rnn(cat_out) # r_out : (batch_size, timesteps, 1024)
-        l_out1 = self.linear1(r_out) # (batch_size, timesteps, 128)
-        l_out2 = self.linear2(l_out1) # (batch_size, timesteps, 6)
+        r_out, (h_n, h_c) = self.rnn(cat_out) # r_out : (batch_size, 1, 1024)
+        l_out1 = self.linear1(r_out[:,-1,:]) # (batch_size, 128)
+        #print("lll_out1 : " , l_out1.shape)
+        l_out2 = self.linear2(l_out1) # (batch_size,  6)
+        #print("lll_out1 : " , l_out2.shape)
         return l_out2
     
     
@@ -265,12 +433,12 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 50
-    batch = 1
-    timesteps = 4
-    model = Vinet(batch=batch, timesteps=timesteps)
-    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    optimizer = optim.Adam(model.parameters(), lr = 0.001)
+    epoch = 20
+    batch = 4
+    model = Vinet(batch=batch)
+    se3Layer = SE3Comp()
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    #optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
     writer = SummaryWriter()
     
@@ -282,55 +450,40 @@ def train():
     
     start = 5
     end = len(mydataset)-batch
-    batch_num = (end - start) #/ batch
+    batch_num = (end - start) / batch
     startT = time.time() 
     abs_traj = None
     
     with tools.TimerBlock("Start training") as block:
         for k in range(epoch):
             for i in range(start, end):#len(mydataset)-1):
-                data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch, timesteps)
+                data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
                 data, data_imu, target_f2f, target_global = \
                     data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
-                #print(data.shape)
-                #print(data_imu.shape)
-                #print(target_f2f.shape)
-                #print(target_global.shape)
-                #exit() 
-                
+
                 optimizer.zero_grad()
                 
-                '''            
+                ## First data for SE3 Composition layer
                 if i == start:
                     ## load first SE3 pose xyzQuaternion
-                    abs_traj = mydataset.getTrajectoryAbs(start)
-                    
-                    abs_traj_input = np.expand_dims(abs_traj, axis=0)
-                    abs_traj_input = np.expand_dims(abs_traj_input, axis=0)
-                    abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) 
-                '''
-                
-                if i == start:
-                    ## load first SE3 pose xyzQuaternion
-                    abs_traj = mydataset.getTrajectoryAbs(start, batch, timesteps) # (batch, timesteps, 7)
-                    abs_traj_input = abs_traj
-                    abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) 
-
-                ## Forward
-                output = model(data, data_imu, abs_traj_input)
-                 
-                ## Accumulate pose
-                numarr = output.data.cpu().numpy() # T0, T1 ... Tk
+                    abs_traj = mydataset.getTrajectoryAbs(start, batch) # (batch, 7)
+                    abs_traj_input = np.expand_dims(abs_traj, axis=2) # (batch, 7, 1)
+                    abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda())
+    
+                ## LSTM part Forward
+                output = model(data, data_imu) # (batch, 6)
+                output = output.unsqueeze(2) # (batch, 6, 1)
+                #output = output.view(batch, 6, 1) # (batch, 6, 1)
                 
                 ## SE part
-                abs_traj_list = []
-                for b in range(batch):
-                    step_list = []
-                    for t in range(timesteps):
-                        abs_traj_temp = se3qua.accu(abs_traj[b, t, ...], numarr[b, t, ...])
-                        step_list.append(abs_traj_temp)
-                    abs_traj_list.append(np.asarray(step_list)) # (2,7)
-                abs_traj = np.asarray(abs_traj_list) # (4,2,6)
+                print(np.shape(abs_traj_input.data.cpu()))
+                print(np.shape(output.data.cpu()))
+                #print(abs_traj_input.data.cpu())
+                #print(output.data.cpu())
+                #exit()
+                abs_traj = se3Layer(abs_traj_input.data.cpu(), output.data.cpu())
+                print(abs_traj.shape)
+                exit()
                 abs_traj_input = abs_traj
                 abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) # (batch,1,7)
 
@@ -348,14 +501,12 @@ def train():
                                                           int(remainingTime//60%60), 
                                                           int(remainingTime%60))
 
-                block.log('Train Epoch: {}\t[{}/{} ({:.0f}%)]\tLoss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(
-                    k, i , batch_num,
-                    100. * (i + batch_num*k) / (batch_num*epoch), loss.data[0], avgTime, rTime_str))
+                block.log('Train Epoch: {}\t[{}/{} ({:.0f}%)]\tLoss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i , batch_num, 100. * (i + batch_num*k) / (batch_num*epoch), loss.data[0], avgTime, rTime_str))
                 
                 writer.add_scalar('loss', loss.data[0], k*batch_num + i)
                 
-            check_str = 'checkpoint_{}.pt'.format(k)
-            torch.save(model.state_dict(), check_str)
+                check_str = 'checkpoint_{}.pt'.format(k)
+                torch.save(model.state_dict(), check_str)
             
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
