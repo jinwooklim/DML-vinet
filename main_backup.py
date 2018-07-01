@@ -346,10 +346,10 @@ class MyDataset:
              
         ## F2F gt
         Y = Variable(torch.from_numpy(self.trajectory_relative[idx+1 : idx+1+batch]).type(torch.FloatTensor).cuda())
-
+        Y = Y.view(batch, 6, 1)
         ## global pose gt
         Y2 = Variable(torch.from_numpy(self.trajectory_abs[idx+1 : idx+1+batch]).type(torch.FloatTensor).cuda())
-        
+       	Y2 = Y2.view(batch, 7, 1)
         return X, X2, Y, Y2
 
     
@@ -452,7 +452,7 @@ def train():
     
     start = 5
     end = len(mydataset)-batch
-    batch_num = (end - start) / batch
+    batch_num = (end - start) #/ batch
     startT = time.time() 
     abs_traj = None
     
@@ -478,17 +478,13 @@ def train():
                 #output = output.view(batch, 6, 1) # (batch, 6, 1)
                 
                 ## SE part
-                print(np.shape(abs_traj_input.data.cpu()))
-                print(np.shape(output.data.cpu()))
                 abs_traj = se3Layer(abs_traj_input.data.cpu(), output.data.cpu())
-                print(abs_traj.shape)
-                abs_traj_input = abs_traj
-                abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) # (batch,1,7)
+                abs_traj_input = Variable(abs_traj) # (batch, 7, 1)
 
                 ## (F2F loss) + (Global pose loss)
                 ## Global pose: Full concatenated pose relative to the start of the sequence
-                ## (batch, timesteps, 6) // (batch, timesteps, 7)
-                loss = criterion(output, target_f2f) + criterion(abs_traj_input, target_global)
+             	## (batch, 6, 1) // (batch, 7, 1)
+                loss = criterion(output.cpu(), target_f2f.cpu()) + criterion(abs_traj_input.cpu(), target_global.cpu())
 
                 loss.backward()
                 optimizer.step()
