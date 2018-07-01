@@ -27,7 +27,6 @@ import csv
 import time
 
 
-
 class SE3Comp(nn.Module):
     def __init__(self):
         super(SE3Comp, self).__init__()
@@ -172,6 +171,7 @@ class SE3Comp(nn.Module):
         theta_cube = torch.mul(theta_sqr, theta)#
         sin_theta = torch.sin(theta)
         sin_theta_div_theta = torch.div(sin_theta,theta)
+        sin_theta_div_theta[sin_theta_div_theta != sin_theta_div_theta] = 0 # set nan to zero
 
         one_minus_cos_theta = torch.ones(theta.size()) - torch.cos(theta)
         one_minus_cos_div_theta_sqr = torch.div(one_minus_cos_theta,theta_sqr)
@@ -185,11 +185,12 @@ class SE3Comp(nn.Module):
         
         # sin_theta_div_theta do not need linear approximation
         sin_theta_div_theta_tensor = sin_theta_div_theta
+        #print(sin_theta_div_theta_tensor)
         for b in range(batchSize):
             if theta_sqr[b] > self.threshold_square:
                 one_minus_cos_div_theta_sqr_tensor[b] = one_minus_cos_div_theta_sqr[b]
             elif theta_sqr[b] < 1e-6:
-                one_minus_cos_div_theta_sqr_tensor[b] = 0.5
+                one_minus_cos_div_theta_sqr_tensor[b] = 0#0.5
             else:#Taylor expansion
                 c = 1.0 / 2.0
                 c += theta[b]**(4*1) / 720.0#np.math.factorial(6) 
@@ -201,7 +202,7 @@ class SE3Comp(nn.Module):
             if theta_cube[b] > self.threshold_cube:
                 theta_minus_sin_div_theta_cube_tensor[b] = theta_minus_sin_div_theta_cube[b]
             elif theta_sqr[b] < 1e-6:
-                theta_minus_sin_div_theta_cube_tensor[b] = 1.0 / 6.0
+                theta_minus_sin_div_theta_cube_tensor[b] = 0#1.0 / 6.0
             else:#Taylor expansion
                 s = 1.0 / 6.0
                 s += theta[b]**(4*1) / 5040.0
@@ -215,8 +216,10 @@ class SE3Comp(nn.Module):
         completeTransformation[:, 0, 0] += 1
         completeTransformation[:, 1, 1] += 1
         completeTransformation[:, 2, 2] += 1   
+
+        sin_theta_div_theta_tensor = torch.unsqueeze(sin_theta_div_theta_tensor, dim=1)
         completeTransformation = completeTransformation +\
-            torch.mul(sin_theta_div_theta_tensor,omega_skew) +\
+            self.vecMulMat(sin_theta_div_theta_tensor,omega_skew) +\
             torch.mul(one_minus_cos_div_theta_sqr_tensor, omega_skew_sqr)
 
 
@@ -228,11 +231,10 @@ class SE3Comp(nn.Module):
             torch.mul(theta_minus_sin_div_theta_cube_tensor, omega_skew_sqr)
         return completeTransformation, V
     
-
-            
-            
-            
-
+    def vecMulMat(self, vec, mat):
+        mat_view = mat.view(vec.size()[0], -1)
+        out = mat_view * vec
+        return out.view(mat_view.size()[0], mat.size()[1], -1)
 
 
 class MyDataset:
@@ -478,12 +480,8 @@ def train():
                 ## SE part
                 print(np.shape(abs_traj_input.data.cpu()))
                 print(np.shape(output.data.cpu()))
-                #print(abs_traj_input.data.cpu())
-                #print(output.data.cpu())
-                #exit()
                 abs_traj = se3Layer(abs_traj_input.data.cpu(), output.data.cpu())
                 print(abs_traj.shape)
-                exit()
                 abs_traj_input = abs_traj
                 abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda()) # (batch,1,7)
 
