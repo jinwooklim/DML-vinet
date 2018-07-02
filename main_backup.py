@@ -320,11 +320,11 @@ class MyDataset:
     def load_img_bat(self, idx, batch):
         batch_x = []
         batch_imu =[]
-        for batch_idx in range(batch):
+        for i in range(batch):
             #print("### batch_idx ###")
-            #print("img_idx : ", idx + batch_idx, idx+1 + batch_idx)
-            x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx + batch_idx]))
-            x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1 + batch_idx]))
+            #print("img_idx : ", idx+i, idx+1+i)
+            x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i]))
+            x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
 
             ## 3 channels
             x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
@@ -333,9 +333,11 @@ class MyDataset:
             X = np.array([x_data_np_1, x_data_np_2])
             batch_x.append(X)
 
-            #print("IMU_idx : ", idx-self.imu_seq_len+1+batch_idx, idx+1+batch_idx)
-            tmp = np.array(self.imu[idx-self.imu_seq_len+batch_idx : idx+1+batch_idx])
+            #print("IMU_idx : ", idx-self.imu_seq_len+1+i, idx+1+i)
+            tmp = np.array(self.imu[idx-self.imu_seq_len+i : idx+1+i])
             batch_imu.append(tmp)
+
+            idx = idx + 1
         
         batch_x = np.array(batch_x)
         batch_imu = np.array(batch_imu)
@@ -435,7 +437,7 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 20
+    epoch = 10
     batch = 4
     model = Vinet(batch=batch)
     se3Layer = SE3Comp()
@@ -452,13 +454,13 @@ def train():
     
     start = 5
     end = len(mydataset)-batch
-    batch_num = (end - start) #/ batch
+    batch_num = (end - start) // (batch*2)
     startT = time.time() 
     abs_traj = None
     
     with tools.TimerBlock("Start training") as block:
         for k in range(epoch):
-            for i in range(start, end):#len(mydataset)-1):
+            for i in range(start, end, (batch*2)):#len(mydataset)-1):
                 data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
                 data, data_imu, target_f2f, target_global = \
                     data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
@@ -504,7 +506,7 @@ def train():
             
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
-    torch.save(model.state_dict(), 'vinet_v1_01.pt')
+    #torch.save(model.state_dict(), 'vinet_v1_01.pt')
     writer.export_scalars_to_json("./all_scalars.json")
     writer.close()
 
