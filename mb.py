@@ -321,8 +321,8 @@ class MyDataset:
         batch_x = []
         batch_imu =[]
         for i in range(batch):
-            print("### batch_idx ###")
-            print("img_idx : ", idx+i, idx+1+i)
+            #print("### batch_idx ###")
+            #print("img_idx : ", idx+i, idx+1+i)
             x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i]))
             x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
 
@@ -333,11 +333,11 @@ class MyDataset:
             X = np.array([x_data_np_1, x_data_np_2])
             batch_x.append(X)
 
-            print("IMU_idx : ", idx-self.imu_seq_len+1+i, idx+1+i)
+            #print("IMU_idx : ", idx-self.imu_seq_len+1+i, idx+1+i)
             tmp = np.array(self.imu[idx-self.imu_seq_len+i : idx+1+i])
             batch_imu.append(tmp)
 
-            #idx = idx + 1
+            idx = idx + 1
         
         batch_x = np.array(batch_x)
         batch_imu = np.array(batch_imu)
@@ -357,19 +357,19 @@ class MyDataset:
     
     
 class Vinet(nn.Module):
-    def __init__(self):
+    def __init__(self, batch):
         super(Vinet, self).__init__()
         self.rnn = nn.LSTM(
             input_size=49158, #12301, #49152,#24576, 
             hidden_size=1024,#64, 
-            num_layers=1,
+            num_layers=2,
             batch_first=True)
         self.rnn.cuda()
         
         self.rnnIMU = nn.LSTM(
             input_size=6, 
             hidden_size=6,
-            num_layers=1,
+            num_layers=2,
             batch_first=True)
         self.rnnIMU.cuda()
         
@@ -438,9 +438,8 @@ def model_out_to_flow_png(output):
 
 def train():
     epoch = 10
-    streams = 1
     batch = 4
-    model = Vinet()
+    model = Vinet(batch=batch)
     se3Layer = SE3Comp()
     #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     optimizer = optim.Adam(model.parameters(), lr = 0.001)
@@ -455,14 +454,13 @@ def train():
     
     start = 5
     end = len(mydataset)-batch
-    batch_num = (end - start) // (batch)
+    batch_num = (end - start) // (batch*2)
     startT = time.time() 
     abs_traj = None
     
     with tools.TimerBlock("Start training") as block:
         for k in range(epoch):
-            #for i in range(start, end, (batch*2)):#len(mydataset)-1):
-            for i in range(start, end, (batch)):#len(mydataset)-1):
+            for i in range(start, end, (batch*2)):#len(mydataset)-1):
                 data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
                 data, data_imu, target_f2f, target_global = \
                     data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
@@ -583,9 +581,9 @@ def test():
    
     
 def main():
-    train()
+    #train()
           
-    #test()
+    test()
 
 
 if __name__ == '__main__':

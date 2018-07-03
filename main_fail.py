@@ -301,7 +301,7 @@ class MyDataset:
         return self.trajectory_abs[idx]
     '''
 
-    def getTrajectoryAbs(self, idx, batch):
+    def getTrajectoryAbs(self, idx, batch, timesteps):
         return_list = []
         for b in range(batch):
             batch_first_trajectory = self.trajectory_abs[idx+b]
@@ -317,44 +317,63 @@ class MyDataset:
     def __len__(self):
         return len(self.trajectory_relative)
     
-    def load_img_bat(self, idx, batch):
+    def load_img_bat(self, idx, batch, timesteps):
         batch_x = []
-        batch_imu =[]
-        for i in range(batch):
-            print("### batch_idx ###")
-            print("img_idx : ", idx+i, idx+1+i)
-            x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i]))
-            x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
+        batch_imu = []
+        batch_y = []
+        batch_y2 = []
+        for b in range(batch):
+            #print("### batch : ", b)
+            timesteps_x = []
+            timesteps_imu =[]
+            for i in range(timesteps):
+                #print("### timesteps_idx : ", i)
+                #print("img_idx : ", idx+i, idx+1+i)
+                x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i]))
+                x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
 
-            ## 3 channels
-            x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
-            x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2])
+                ## 3 channels
+                x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
+                x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2])
 
-            X = np.array([x_data_np_1, x_data_np_2])
-            batch_x.append(X)
+                X = np.array([x_data_np_1, x_data_np_2])
+                timesteps_x.append(X)
 
-            print("IMU_idx : ", idx-self.imu_seq_len+1+i, idx+1+i)
-            tmp = np.array(self.imu[idx-self.imu_seq_len+i : idx+1+i])
-            batch_imu.append(tmp)
+                #print("IMU_idx : ", idx-self.imu_seq_len+1+i, idx+1+i)
+                tmp = np.array(self.imu[idx-self.imu_seq_len+i : idx+1+i])
+                timesteps_imu.append(tmp)
+                
+            idx = idx + timesteps
 
-            #idx = idx + 1
+            batch_x.append(timesteps_x)
+            batch_imu.append(timesteps_imu)
+         
+            y = self.trajectory_relative[idx+1 : idx+1+timesteps]
+            batch_y.append(y)
+            y2 = self.trajectory_abs[idx+1 : idx+1+timesteps]
+            batch_y2.append(y2)     
         
         batch_x = np.array(batch_x)
         batch_imu = np.array(batch_imu)
-            
+        batch_y = np.array(batch_y)
+        batch_y2 = np.array(batch_y2)
+
         X = Variable(torch.from_numpy(batch_x).type(torch.FloatTensor).cuda())    
         X2 = Variable(torch.from_numpy(batch_imu).type(torch.FloatTensor).cuda())    
+ 
+        batch_y = np.expand_dims(batch_y, axis=3) # (batch, timesteps, 6, 1)
+        Y = Variable(torch.from_numpy(batch_y).type(torch.FloatTensor).cuda())
+        #print(Y.shape)
+        Y = Y.view(batch, timesteps, 6, 1)
+        
+        
+        batch_y2 = np.expand_dims(batch_y2, axis=3) # (batch, timesteps, 7, 1)
+        Y2 = Variable(torch.from_numpy(batch_y2).type(torch.FloatTensor).cuda())
+        #print(Y2.shape)
+        Y2 = Y2.view(batch, timesteps, 7, 1)
 
-             
-        ## F2F gt
-        Y = Variable(torch.from_numpy(self.trajectory_relative[idx+1 : idx+1+batch]).type(torch.FloatTensor).cuda())
-        Y = Y.view(batch, 6, 1)
-        ## global pose gt
-        Y2 = Variable(torch.from_numpy(self.trajectory_abs[idx+1 : idx+1+batch]).type(torch.FloatTensor).cuda())
-       	Y2 = Y2.view(batch, 7, 1)
         return X, X2, Y, Y2
 
-    
     
 class Vinet(nn.Module):
     def __init__(self):
@@ -362,14 +381,14 @@ class Vinet(nn.Module):
         self.rnn = nn.LSTM(
             input_size=49158, #12301, #49152,#24576, 
             hidden_size=1024,#64, 
-            num_layers=1,
+            num_layers=2,
             batch_first=True)
         self.rnn.cuda()
         
         self.rnnIMU = nn.LSTM(
             input_size=6, 
             hidden_size=6,
-            num_layers=1,
+            num_layers=2,
             batch_first=True)
         self.rnnIMU.cuda()
         
@@ -377,6 +396,8 @@ class Vinet(nn.Module):
         self.linear2 = nn.Linear(128, 6)
         self.linear1.cuda()
         self.linear2.cuda()
+
+        self.SE3layer = SE3Comp()
         
         checkpoint = None
         checkpoint_pytorch = '/notebooks/model/FlowNet2-C_checkpoint.pth.tar'
@@ -392,36 +413,73 @@ class Vinet(nn.Module):
         self.flownet_c.load_state_dict(checkpoint['state_dict'])
         self.flownet_c.cuda()
 
-    def forward(self, image, imu):
-        batch_size, timesteps, C, H, W = image.size() # [batch, timesteps, channel, Height, Width]
-         
+    def forward(self, image, imu, init_SE3):
+        batch_size, timesteps, _, C, H, W = image.size() # [batch, timesteps, 2, channel, Height, Width]
+        #print(image.shape) 
+        
         ## Input1: Feed image pairs to FlownetC
-        ##c_in = image.view(batch_size, timesteps * C, H, W)
-        c_in = image.view(batch_size, timesteps * C, H, W)
-        c_out = self.flownet_c(c_in)
-
+        batch_c_out = []
+        for i in range(batch_size):
+            c_in = image[i, ...].view(timesteps, 2 * C, H, W)
+            c_out = self.flownet_c(c_in)
+            c_out = c_out.view(timesteps, -1)
+            batch_c_out.append(c_out)
+        batch_c_out = torch.stack(batch_c_out) # [batch, timestpes, -1]
+        
         ## Input2: Feed IMU records to LSTM
-        imu_out, (imu_n, imu_c) = self.rnnIMU(imu)
-        #imu_out = imu.view(batch_size, 1, -1)
-        imu_out = imu_out[:, -1, :] # (batch, 6)
-        #print("imu_out : ", imu_out.shape)
-        imu_out = imu_out.unsqueeze(1) # (batch, 1, 6)
-        #print("imu_out : ", imu_out.shape)
+        batch_imu_out = []
+        for i in range(batch_size):
+            imu_out, (imu_n, imu_c) = self.rnnIMU(imu[i,...]) # [timesteps, 6, 6]
+            imu_out = imu_out[:, -1, :] # (batch, 6)
+            batch_imu_out.append(imu_out)
+        batch_imu_out = torch.stack(batch_imu_out) # [batch, timesteps, -1]
         
         ## Combine the output of input1 and 2 and feed it to LSTM
-        ##r_in = c_out.view(batch_size, timesteps, -1)
-        r_in = c_out.view(batch_size, 1, -1) # (batch, timesteps, 49152)
-        cat_out = torch.cat((r_in, imu_out), 2) # (batch, timesteps, ?)
-        #print("cat_out : ", cat_out.shape)
-        
+        cat_out = torch.cat((batch_c_out, batch_imu_out), 2) # (batch, timesteps, ?)
+
         ## Feed concatenate data to Main LSTM stream
-        #print("Main LSTM stream input size : ", cat_out.shape)
-        r_out, (h_n, h_c) = self.rnn(cat_out) # r_out : (batch_size, 1, 1024)
-        l_out1 = self.linear1(r_out[:,-1,:]) # (batch_size, 128)
-        #print("lll_out1 : " , l_out1.shape)
-        l_out2 = self.linear2(l_out1) # (batch_size,  6)
-        #print("lll_out1 : " , l_out2.shape)
-        return l_out2
+        r_out, (h_n, h_c) = self.rnn(cat_out) # r_out : (batch_size, timesteps, 1024)
+        l_out1 = self.linear1(r_out) # (batch_size, timesteps, 128)
+        se3 = self.linear2(l_out1) # (batch_size, timesteps, 6)
+        #print(se3.shape) # 1, 3, 6
+        #se3 = se3.unsqueeze(4)
+        se3 = se3.view(batch_size, timesteps, 6, 1)
+        #print(se3.shape) # 1, 3, 6
+
+        ### TODO : original
+        ## SE3 Composition layer
+        '''
+        batch_composed_SE3 = []
+        in_se3 = None
+        for b in range(batch_size):
+            for t in range(timesteps):
+                if(t==0):
+                    in_SE3 = init_SE3[b, ...]
+                    print(in_SE3.shape) # (7, 1)
+                    print((se3.data.cpu())[b, t, ...].shape) # (6)
+                    in_SE3 = self.SE3layer(in_SE3, (se3.data.cpu())[b, t, ...])
+                else:
+                    in_SE3 = self.SE3layer(in_SE3, (se3.data.cpu())[b, t, ...])
+            batch_composed_SE3.append(in_SE3) # Get last composed_SE3
+        batch_composed_SE3 = torch.stack(batch_composed_SE3)
+        '''
+        ### TODO : Escape batch_size == 1 error
+        ## SE3 Composition layer
+        batch_composed_SE3 = []
+        in_se3 = None
+        for t in range(timesteps):
+            if(t==0):
+                in_SE3 = init_SE3[:, ...]
+                #print(in_SE3.shape)
+                #print((se3.data.cpu())[:, t, ...].shape) # (6)
+                in_SE3 = self.SE3layer(in_SE3, (se3.data.cpu())[:, t, ...])
+            else:
+                in_SE3 = self.SE3layer(in_SE3, (se3.data.cpu())[:, t, ...])
+            batch_composed_SE3.append(in_SE3)
+        batch_composed_SE3 = torch.stack(batch_composed_SE3, dim=1)
+        #print("se3 : ", se3.shape)
+        #print("composed_SE3 : ", batch_composed_SE3.shape)
+        return se3, batch_composed_SE3
     
     
 def model_out_to_flow_png(output):
@@ -438,8 +496,8 @@ def model_out_to_flow_png(output):
 
 def train():
     epoch = 10
-    streams = 1
-    batch = 4
+    batch = 2
+    timesteps = 2
     model = Vinet()
     se3Layer = SE3Comp()
     #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
@@ -454,16 +512,15 @@ def train():
     criterion  = nn.L1Loss(size_average=False)
     
     start = 5
-    end = len(mydataset)-batch
-    batch_num = (end - start) // (batch)
+    end = len(mydataset)-(batch*timesteps)
+    batch_num = (end - start) // (batch*timesteps)
     startT = time.time() 
     abs_traj = None
     
     with tools.TimerBlock("Start training") as block:
         for k in range(epoch):
-            #for i in range(start, end, (batch*2)):#len(mydataset)-1):
-            for i in range(start, end, (batch)):#len(mydataset)-1):
-                data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
+            for i in range(start, end, (batch*timesteps)):#len(mydataset)-1):
+                data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch, timesteps)
                 data, data_imu, target_f2f, target_global = \
                     data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
 
@@ -472,22 +529,17 @@ def train():
                 ## First data for SE3 Composition layer
                 if i == start:
                     ## load first SE3 pose xyzQuaternion
-                    abs_traj = mydataset.getTrajectoryAbs(start, batch) # (batch, 7)
+                    abs_traj = mydataset.getTrajectoryAbs(start, batch, timesteps) # (batch, 7)
                     abs_traj_SE3 = np.expand_dims(abs_traj, axis=2) # (batch, 7, 1)
                     abs_traj_SE3 = Variable(torch.from_numpy(abs_traj_SE3).type(torch.FloatTensor).cuda())
     
                 ## LSTM part Forward
-                se3 = model(data, data_imu) # (batch, 6)
-                se3 = se3.unsqueeze(2) # (batch, 6, 1)
-                
-                ## SE part
-                abs_traj = se3Layer(abs_traj_SE3.data.cpu(), se3.data.cpu())
-                abs_traj_SE3 = Variable(abs_traj) # (batch, 7, 1)
+                se3, composed_SE3 = model(data, data_imu, abs_traj_SE3) # (batch, 6)
 
                 ## (F2F loss) + (Global pose loss)
                 ## Global pose: Full concatenated pose relative to the start of the sequence
-             	## (batch, 6, 1) // (batch, 7, 1)
-                loss = criterion(se3.cpu(), target_f2f.cpu()) + criterion(abs_traj_SE3.cpu(), target_global.cpu())
+             	## (batch, timesteps, 6, 1) // (batch, timesteps, 7, 1)
+                loss = criterion(se3.cpu(), target_f2f.cpu()) + criterion(composed_SE3.cpu(), target_global.cpu())
 
                 loss.backward()
                 optimizer.step()
@@ -549,7 +601,7 @@ def test():
             abs_traj_SE3 = Variable(torch.from_numpy(abs_traj_SE3).type(torch.FloatTensor).cuda()) 
                     
         ## LSTM part forward
-        se3 = model(data, data_imu) # (v1, v2, v3, v4 ,v5, v6)
+        se3 = model(data, data_imu, abs_traj_SE3) # (v1, v2, v3, v4 ,v5, v6)
         se3 = se3.unsqueeze(2) # (batch, 6, 1)
         
         ## SE part
