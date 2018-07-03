@@ -441,8 +441,8 @@ def train():
     batch = 4
     model = Vinet(batch=batch)
     se3Layer = SE3Comp()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    #optimizer = optim.Adam(model.parameters(), lr = 0.001)
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
     writer = SummaryWriter()
     
@@ -471,22 +471,21 @@ def train():
                 if i == start:
                     ## load first SE3 pose xyzQuaternion
                     abs_traj = mydataset.getTrajectoryAbs(start, batch) # (batch, 7)
-                    abs_traj_input = np.expand_dims(abs_traj, axis=2) # (batch, 7, 1)
-                    abs_traj_input = Variable(torch.from_numpy(abs_traj_input).type(torch.FloatTensor).cuda())
+                    abs_traj_SE3 = np.expand_dims(abs_traj, axis=2) # (batch, 7, 1)
+                    abs_traj_SE3 = Variable(torch.from_numpy(abs_traj_SE3).type(torch.FloatTensor).cuda())
     
                 ## LSTM part Forward
-                output = model(data, data_imu) # (batch, 6)
-                output = output.unsqueeze(2) # (batch, 6, 1)
-                #output = output.view(batch, 6, 1) # (batch, 6, 1)
+                se3 = model(data, data_imu) # (batch, 6)
+                se3 = se3.unsqueeze(2) # (batch, 6, 1)
                 
                 ## SE part
-                abs_traj = se3Layer(abs_traj_input.data.cpu(), output.data.cpu())
-                abs_traj_input = Variable(abs_traj) # (batch, 7, 1)
+                abs_traj = se3Layer(abs_traj_SE3.data.cpu(), se3.data.cpu())
+                abs_traj_SE3 = Variable(abs_traj) # (batch, 7, 1)
 
                 ## (F2F loss) + (Global pose loss)
                 ## Global pose: Full concatenated pose relative to the start of the sequence
              	## (batch, 6, 1) // (batch, 7, 1)
-                loss = criterion(output.cpu(), target_f2f.cpu()) + criterion(abs_traj_input.cpu(), target_global.cpu())
+                loss = criterion(se3.cpu(), target_f2f.cpu()) + criterion(abs_traj_SE3.cpu(), target_global.cpu())
 
                 loss.backward()
                 optimizer.step()
@@ -513,7 +512,7 @@ def train():
 
 def test():
     #checkpoint_pytorch = '/notebooks/vinet/vinet_v1_01.pt'
-    checkpoint_pytorch = '/notebooks/vinet/checkpoint_0.pt'
+    checkpoint_pytorch = '/notebooks/vinet/checkpoint_9.pt'
     if os.path.isfile(checkpoint_pytorch):
         checkpoint = torch.load(checkpoint_pytorch,\
                             map_location=lambda storage, loc: storage.cuda(0))
@@ -521,7 +520,9 @@ def test():
     else:
         print('No checkpoint')
     
-    model = Vinet()
+    batch = 2
+    model = Vinet(batch=batch)
+    se3Layer = SE3Comp()
     model.load_state_dict(checkpoint)  
     model.cuda()
     model.eval()
@@ -533,61 +534,56 @@ def test():
     ans = []
     abs_traj = None
     start = 5
-    for i in range(start, len(mydataset)-1):
-    #for i in range(start, 100):
-        data, data_imu, target, target2 = mydataset.load_img_bat(i, 1)
-        data, data_imu, target, target2 = data.cuda(), data_imu.cuda(), target.cuda(), target2.cuda()
+    #for i in range(start, len(mydataset)-batch):
+    for i in range(start, 100):
+        data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
+        data, data_imu, target_f2f, target_global = data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
 
+        ## First data for SE3 Composition layer
         if i == start:
             ## load first SE3 pose xyzQuaternion
-            abs_traj = mydataset.getTrajectoryAbs(start)
-            abs_traj = np.expand_dims(abs_traj, axis=0)
-            abs_traj = np.expand_dims(abs_traj, axis=0)
-            abs_traj = Variable(torch.from_numpy(abs_traj).type(torch.FloatTensor).cuda()) 
+            abs_traj = mydataset.getTrajectoryAbs(start, batch)
+            abs_traj_SE3 = np.expand_dims(abs_traj, axis=2) # (x, y, z, w, wx, wy, wz)
+            abs_traj_SE3 = Variable(torch.from_numpy(abs_traj_SE3).type(torch.FloatTensor).cuda()) 
                     
-        output = model(data, data_imu, abs_traj)
+        ## LSTM part forward
+        se3 = model(data, data_imu) # (v1, v2, v3, v4 ,v5, v6)
+        se3 = se3.unsqueeze(2) # (batch, 6, 1)
         
-        err += float(((target - output) ** 2).mean())
+        ## SE part
+        abs_traj_SE3 = se3Layer(abs_traj_SE3.data.cpu(), se3.data.cpu())
+        abs_traj_SE3 = Variable(abs_traj_SE3) # (batch, 7, 1)
+	    
+        err += float(((target_f2f - se3) ** 2).mean()) # mean((x-X)^2)
+        print(err)
+	    ## Convert se3(v1, v2, v3, v4, v5, v6) -> xyzQ
+        #xyzq = se3qua.se3R6toxyzQ(se3.data.cpu().numpy())
+        #ans.append(xyzq)
+        #print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
         
-        output = output.data.cpu().numpy()
-
-        xyzq = se3qua.se3R6toxyzQ(output)
-                
-        abs_traj = abs_traj.data.cpu().numpy()[0]
-        numarr = output
-        
-        abs_traj = se3qua.accu(abs_traj, numarr)
-        abs_traj = np.expand_dims(abs_traj, axis=0)
-        abs_traj = np.expand_dims(abs_traj, axis=0)
-        abs_traj = Variable(torch.from_numpy(abs_traj).type(torch.FloatTensor).cuda()) 
-        
-        ans.append(xyzq)
-        print(xyzq)
-        print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
-        
-    print('err = {}'.format(err/(len(mydataset)-1)))  
-    trajectoryAbs = mydataset.getTrajectoryAbsAll()
-    print(trajectoryAbs[0])
-    x = trajectoryAbs[0].astype(str)
-    x = ",".join(x)
+    print('Final err = {}'.format(err/(len(mydataset)-1)))  
+    #trajectoryAbs = mydataset.getTrajectoryAbsAll()
+    #print(trajectoryAbs[0])
+    #x = trajectoryAbs[0].astype(str)
+    #x = ",".join(x)
     
     #with open('/notebooks/EuRoC_modify/V2_01_easy/vicon0/sampled_relative_ans.csv', 'w+') as f:
-    with open('/notebooks/vinet/%s_sampled_relative_ans.csv'%datapath, 'w') as f:
-        tmpStr = x
-        f.write(tmpStr + '\n')        
-        
-        for i in range(len(ans)-1):
-            tmpStr = ans[i].astype(str)
-            tmpStr = ",".join(tmpStr)
-            print(tmpStr)
-            print(type(tmpStr))
-            f.write(tmpStr + '\n')      
+    #with open('/notebooks/vinet/%s_sampled_relative_ans.csv'%datapath, 'w') as f:
+    #    tmpStr = x
+    #    f.write(tmpStr + '\n')        
+    #    
+    #    for i in range(len(ans)-1):
+    #        tmpStr = ans[i].astype(str)
+    #        tmpStr = ",".join(tmpStr)
+    #        print(tmpStr)
+    #        print(type(tmpStr))
+    #        f.write(tmpStr + '\n')      
    
     
 def main():
-    train()
+    #train()
           
-    #test()
+    test()
 
 
 if __name__ == '__main__':
