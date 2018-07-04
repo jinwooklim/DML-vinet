@@ -328,8 +328,7 @@ class MyDataset(Dataset):
         #print("y : ", idx-self.timesteps, idx)
         y = self.trajectory_relative[idx-self.timesteps : idx]
         y2 = self.trajectory_abs[idx-self.timesteps : idx]
-        #print("np(y) : ", np.shape(y))
-        #print("np(y2) : ", np.shape(y2))
+        
         timesteps_x = np.array(timesteps_x)
         timesteps_imu = np.array(timesteps_imu)
         
@@ -448,7 +447,7 @@ def model_out_to_flow_png(output):
 
 def train():
     epoch = 20
-    batch = 4
+    batch = 8
     timesteps = 4 # 2
     start = 10 # 7
     #end = len(mydataset)-timesteps
@@ -476,18 +475,13 @@ def train():
     
     with tools.TimerBlock("Start training") as block:
         for k in range(1, epoch+1):
-            try:
-                for i, data in enumerate(train_data_loader):
-                    img, imu, init_SE3, target_f2f, target_global = data
+            #for i, data in enumerate(train_data_loader):
+            for i in range(len(mydataset)):
+                try:
+                    img, imu, init_SE3, target_f2f, target_global = next(iter(train_data_loader))
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
                     optimizer.zero_grad()
 
-                    ## Load first SE3 pose xyzQuaternion
-                    ## TODO
-                    ##init_SE3 = mydataset.getTrajectoryAbs(i, batch, timesteps) # (batch, 7)
-                    ##init_SE3 = np.expand_dims(init_SE3, axis=2) # (batch, 7, 1)
-                    ##init_SE3 = Variable(torch.from_numpy(init_SE3).type(torch.FloatTensor).cuda())
-                
                     ## LSTM part Forward
                     se3, composed_SE3 = model(img, imu, init_SE3) # (batch, 6)
 
@@ -511,9 +505,13 @@ def train():
                     if(i%100==0):
                         check_str = 'checkpoint_{}.pt'.format(k)
                         torch.save(model.state_dict(), check_str)
-            except TypeError as e:
-                print("idx is too small")
-                pass
+                except TypeError as e:
+                    print("idx is too small")
+                    continue
+                except RuntimeError as e:
+                    print("RuntimeError")
+                    continue
+                
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
     #torch.save(model.state_dict(), 'vinet_v1_01.pt')
