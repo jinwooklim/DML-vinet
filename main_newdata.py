@@ -300,7 +300,7 @@ class MyDataset(Dataset):
         return len(self.trajectory_relative)
     
     def __getitem__(self, idx):
-        #print("init_SE3_idx : ", idx-self.timesteps, "\tidx : ", idx)
+        print("init_SE3_idx : ", idx-self.timesteps, "\tidx : ", idx)
         init_SE3 = self.getTrajectoryAbs(idx-self.timesteps) # (7,)
         init_SE3 = np.expand_dims(init_SE3, axis=1) # (7,1)
         init_SE3 = np.expand_dims(init_SE3, axis=0) # (1, 7, 1)
@@ -446,18 +446,19 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 20
+    epoch = 5
     batch = 8
     timesteps = 4 # 2
     start = 10 # 7
     #end = len(mydataset)-timesteps
     model = Vinet()
     
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    #optimizer = optim.Adam(model.parameters(), lr = 0.001)
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
-    #criterion  = nn.MSELoss()
-    criterion  = nn.L1Loss(size_average=False)
+    criterion  = nn.MSELoss()
+    #criterion  = nn.L1Loss(size_average=False)
+    #criterion  = nn.MSELoss(size_average=False)
     
     writer = SummaryWriter()
     startT = time.time() 
@@ -467,7 +468,7 @@ def train():
     mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', timesteps)
     train_data_loader = DataLoader(dataset=mydataset, \
                                     batch_size=batch, \
-                                    shuffle=True, \
+                                    shuffle=False, \
                                     num_workers=0, \
                                     drop_last=False)
     
@@ -476,9 +477,14 @@ def train():
     with tools.TimerBlock("Start training") as block:
         for k in range(1, epoch+1):
             #for i, data in enumerate(train_data_loader):
-            for i in range(len(mydataset)):
+            #for i in range(len(mydataset)//batch):
+            i = 0
+            it = iter(train_data_loader)
+            while(True):
+                if(i == len(mydataset)//batch):
+                    break
                 try:
-                    img, imu, init_SE3, target_f2f, target_global = next(iter(train_data_loader))
+                    img, imu, init_SE3, target_f2f, target_global = next(it)
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
                     optimizer.zero_grad()
 
@@ -488,6 +494,8 @@ def train():
                     ## (F2F loss) + (Global pose loss)
                     ## Global pose: Full concatenated pose relative to the start of the sequence
              	    ## (batch, timesteps, 6, 1) // (batch, timesteps, 7, 1)
+                    #loss_se3 = 
+                    #lossSE3 = 
                     loss = criterion(se3.cpu(), target_f2f.cpu()) + criterion(composed_SE3.cpu(), target_global.cpu())
 
                     loss.backward()
@@ -495,23 +503,24 @@ def train():
                 
                     avgTime = block.avg()
                     #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
-                    remainingTime = int((epoch*len(mydataset)*avgTime) - (k*i*avgTime))
+                    remainingTime = int((epoch*len(mydataset)//batch*avgTime) - (k*i*avgTime))
                     rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
                                                           int(remainingTime//60%60), 
                                                           int(remainingTime%60))
 
-                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)*epoch, loss.data[0], avgTime, rTime_str))
+                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)*epoch//batch, loss.data[0], avgTime, rTime_str))
                 
                     if(i%100==0):
                         check_str = 'checkpoint_{}.pt'.format(k)
                         torch.save(model.state_dict(), check_str)
+                    i = i + 1
                 except TypeError as e:
-                    print("idx is too small")
-                    continue
+                    print("idx is too small : %s, %s"%(k, i))
+                    next(it)
                 except RuntimeError as e:
-                    print("RuntimeError")
-                    continue
-                
+                    print("RuntimeError : %s, %s"%(k, i))
+                    next(it)
+                     
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
     #torch.save(model.state_dict(), 'vinet_v1_01.pt')
