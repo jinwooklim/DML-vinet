@@ -446,7 +446,7 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 5
+    epoch = 10
     batch = 8
     timesteps = 4 # 2
     start = 10 # 7
@@ -504,7 +504,7 @@ def train():
                                                           int(remainingTime//60%60), 
                                                           int(remainingTime%60))
 
-                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i*batch, len(mydataset)//batch, loss.data[0], avgTime, rTime_str))
+                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)//batch, loss.data[0], avgTime, rTime_str))
                     
                     if(i%100==0):
                         check_str = 'checkpoint_{}.pt'.format(k)
