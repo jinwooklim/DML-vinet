@@ -475,6 +475,7 @@ def train():
     init_SE3 = None
     
     with tools.TimerBlock("Start training") as block:
+        total_i = 0
         for k in range(1, epoch+1):
             i = 1
             it = iter(train_data_loader)
@@ -499,7 +500,7 @@ def train():
                 
                     avgTime = block.avg()
                     #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
-                    remainingTime = int((epoch*len(mydataset)//batch*avgTime) - (k*i*avgTime))
+                    remainingTime = int((epoch*len(mydataset)//batch*avgTime) - (k*total_i*avgTime))
                     rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
                                                           int(remainingTime//60%60), 
                                                           int(remainingTime%60))
@@ -520,6 +521,7 @@ def train():
                     i = i + 1
                     next(it)
                 except StopIteration as e:
+                    total_i = total_i + i
                     break
                      
     #torch.save(model, 'vinet_v1_01.pt')
