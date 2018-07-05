@@ -300,7 +300,7 @@ class MyDataset(Dataset):
         return len(self.trajectory_relative)
     
     def __getitem__(self, idx):
-        print("init_SE3_idx : ", idx-self.timesteps, "\tidx : ", idx)
+        #print("init_SE3_idx : ", idx-self.timesteps, "\tidx : ", idx)
         init_SE3 = self.getTrajectoryAbs(idx-self.timesteps) # (7,)
         init_SE3 = np.expand_dims(init_SE3, axis=1) # (7,1)
         init_SE3 = np.expand_dims(init_SE3, axis=0) # (1, 7, 1)
@@ -476,13 +476,9 @@ def train():
     
     with tools.TimerBlock("Start training") as block:
         for k in range(1, epoch+1):
-            #for i, data in enumerate(train_data_loader):
-            #for i in range(len(mydataset)//batch):
-            i = 0
+            i = 1
             it = iter(train_data_loader)
             while(True):
-                if(i == len(mydataset)//batch):
-                    break
                 try:
                     img, imu, init_SE3, target_f2f, target_global = next(it)
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
@@ -508,18 +504,23 @@ def train():
                                                           int(remainingTime//60%60), 
                                                           int(remainingTime%60))
 
-                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)*epoch//batch, loss.data[0], avgTime, rTime_str))
-                
+                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i*batch, len(mydataset)//batch, loss.data[0], avgTime, rTime_str))
+                    
                     if(i%100==0):
                         check_str = 'checkpoint_{}.pt'.format(k)
                         torch.save(model.state_dict(), check_str)
                     i = i + 1
+                
                 except TypeError as e:
-                    print("idx is too small : %s, %s"%(k, i))
+                    print("idx is too small : %s, %s"%(k, i*batch))
+                    i = i + 1
                     next(it)
                 except RuntimeError as e:
-                    print("RuntimeError : %s, %s"%(k, i))
+                    print("RuntimeError : %s, %s"%(k, i*batch))
+                    i = i + 1
                     next(it)
+                except StopIteration as e:
+                    break
                      
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
