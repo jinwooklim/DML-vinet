@@ -324,6 +324,10 @@ class MyDataset(Dataset):
             #print("IMU_idx : ", idx-self.timesteps+i+1-self.imu_seq_len, idx-self.timesteps+i+1)
             tmp = np.array(self.imu[idx-self.timesteps+i+1-self.imu_seq_len : idx-self.timesteps+i+1])
             timesteps_imu.append(tmp)
+        
+        print("%s || "%(idx), end=" ")
+        #print("%s || x : "%(idx), np.shape(timesteps_x), end=" ")
+        #print("imu ", np.shape(timesteps_imu))
                 
         #print("y : ", idx-self.timesteps, idx)
         y = self.trajectory_relative[idx-self.timesteps : idx]
@@ -345,6 +349,7 @@ class MyDataset(Dataset):
         #print(X2.shape)
         #print(Y.shape)
         #print(Y2.shape)
+        #print("get data")
         return X, X2, init_SE3, Y, Y2
 
     
@@ -449,21 +454,6 @@ def train():
     epoch = 10
     batch = 8
     timesteps = 4 # 2
-    start = 10 # 7
-    #end = len(mydataset)-timesteps
-    model = Vinet()
-    
-    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    optimizer = optim.Adam(model.parameters(), lr = 0.001)
-    
-    criterion  = nn.MSELoss()
-    #criterion  = nn.L1Loss(size_average=False)
-    #criterion  = nn.MSELoss(size_average=False)
-    
-    writer = SummaryWriter()
-    startT = time.time() 
-    
-    model.train()
 
     mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', timesteps)
     train_data_loader = DataLoader(dataset=mydataset, \
@@ -472,14 +462,27 @@ def train():
                                     num_workers=0, \
                                     drop_last=False)
     
-    init_SE3 = None
+    model = Vinet()
+    model.train()     
     
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.1)
+    
+    #criterion  = nn.MSELoss(size_average=False)
+    criterion  = nn.MSELoss()   
+    
+    writer = SummaryWriter()
+    startT = time.time() 
+    
+    init_SE3 = None
+
     with tools.TimerBlock("Start training") as block:
         total_i = 0
         for k in range(1, epoch+1):
-            i = 1
+            i = 0
             it = iter(train_data_loader)
             while(True):
+                i = i + 1
                 try:
                     img, imu, init_SE3, target_f2f, target_global = next(it)
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
@@ -508,17 +511,14 @@ def train():
                     block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)//batch, loss.data[0], avgTime, rTime_str))
                     
                     if(i%100==0):
-                        check_str = 'checkpoint_{}.pt'.format(k)
+                        check_str = "checkpoint_%02d.pt"%(k)
                         torch.save(model.state_dict(), check_str)
-                    i = i + 1
                 
                 except TypeError as e:
                     print("idx is too small : %s, %s"%(k, i*batch))
-                    i = i + 1
                     next(it)
                 except RuntimeError as e:
                     print("RuntimeError : %s, %s"%(k, i*batch))
-                    i = i + 1
                     next(it)
                 except StopIteration as e:
                     total_i = total_i + i
@@ -533,7 +533,7 @@ def train():
 
 def test():
     #checkpoint_pytorch = '/notebooks/vinet/vinet_v1_01.pt'
-    checkpoint_pytorch = '/notebooks/vinet/checkpoint_9.pt'
+    checkpoint_pytorch = '/notebooks/vinet/backup/checkpoint_9.pt'
     if os.path.isfile(checkpoint_pytorch):
         checkpoint = torch.load(checkpoint_pytorch,\
                             map_location=lambda storage, loc: storage.cuda(0))
@@ -541,48 +541,84 @@ def test():
     else:
         print('No checkpoint')
     
-    batch = 2
-    model = Vinet(batch=batch)
-    se3Layer = SE3Comp()
+    batch = 1
+    timesteps = 1
+    model = Vinet()
     model.load_state_dict(checkpoint)  
     model.cuda()
     model.eval()
-    #mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V2_01_easy')
+    
     datapath = "V2_01_easy"
-    mydataset = MyDataset('/notebooks/data/', datapath)
+    mydataset = MyDataset('/notebooks/data/', datapath, timesteps)
     
     err = 0
+    err2 = 0
     ans = []
-    abs_traj = None
-    start = 5
-    #for i in range(start, len(mydataset)-batch):
-    for i in range(start, 100):
-        data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
-        data, data_imu, target_f2f, target_global = data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
+    ans2 = []
 
-        ## First data for SE3 Composition layer
-        if i == start:
-            ## load first SE3 pose xyzQuaternion
-            abs_traj = mydataset.getTrajectoryAbs(start, batch)
-            abs_traj_SE3 = np.expand_dims(abs_traj, axis=2) # (x, y, z, w, wx, wy, wz)
-            abs_traj_SE3 = Variable(torch.from_numpy(abs_traj_SE3).type(torch.FloatTensor).cuda()) 
-                    
+    start = 5
+    test_data_loader = DataLoader(dataset = mydataset, \
+                                    batch_size = batch, \
+                                    shuffle = False, \
+                                    num_workers = 0, \
+                                    drop_last = False)
+
+    init_SE3 = None
+    i = 0
+    it = iter(test_data_loader)
+    
+    for i in range(start):
+        try:
+            next(it)
+        except TypeError as e:
+            #print("idx is too small : %s"%(i*batch))
+            next(it)
+        except RuntimeError as e:
+            #print("RuntimeError : %s"%(i*batch))
+            pass
+
+    print("Second while")
+    while(True):
+        i = i + 1
+        try:
+            img, imu, init_SE3, target_f2f, target_global = next(it)
+        except TypeError as e:
+            print("idx is too small : %s"%(i*batch))
+            next(it)
+        except RuntimeError as e:
+            print("RuntimeError : %s"%(i*batch))
+        except StopIteration as e:
+            print("end")
+            break
+
+        img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
+            
         ## LSTM part forward
-        se3 = model(data, data_imu, abs_traj_SE3) # (v1, v2, v3, v4 ,v5, v6)
-        se3 = se3.unsqueeze(2) # (batch, 6, 1)
-        
+        se3, composed_SE3 = model(img, imu, init_SE3) # (batch, 6)
+
+        #print(type(se3))
+        #print(type(composed_SE3))
+        #exit()
+
         ## SE part
-        abs_traj_SE3 = se3Layer(abs_traj_SE3.data.cpu(), se3.data.cpu())
-        abs_traj_SE3 = Variable(abs_traj_SE3) # (batch, 7, 1)
-	    
         err += float(((target_f2f - se3) ** 2).mean()) # mean((x-X)^2)
-        print(err)
-	    ## Convert se3(v1, v2, v3, v4, v5, v6) -> xyzQ
-        #xyzq = se3qua.se3R6toxyzQ(se3.data.cpu().numpy())
-        #ans.append(xyzq)
-        #print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
+        #print(err)
         
+        err2 += float(((target_global.cpu().data.numpy() - composed_SE3.cpu().data.numpy()) ** 2).mean()) # mean((x-X)^2)
+        #print(err2)
+        
+        print(err, "\t", err2)
+        
+	    ## Convert se3(v1, v2, v3, v4, v5, v6) -> xyzQ
+        ## TODO Processing batch : implements
+        ##xyzq = se3qua.se3R6toxyzQ(se3.data.cpu().numpy())
+        ##print(xyzq)
+        ##ans.append(xyzq)
+        #print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
+
     print('Final err = {}'.format(err/(len(mydataset)-1)))  
+    print('Final err2 = {}'.format(err2/(len(mydataset)-1)))  
+    
     #trajectoryAbs = mydataset.getTrajectoryAbsAll()
     #print(trajectoryAbs[0])
     #x = trajectoryAbs[0].astype(str)
@@ -599,12 +635,12 @@ def test():
     #        print(tmpStr)
     #        print(type(tmpStr))
     #        f.write(tmpStr + '\n')      
-   
+
     
 def main():
-    train()
+    #train()
           
-    #test()
+    test()
 
 
 if __name__ == '__main__':
