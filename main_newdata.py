@@ -362,7 +362,7 @@ class MyDataset():
             timesteps_x = []
             timesteps_imu = []
             for i in range(self.timesteps):
-                #print("x. idx: %s, idx+i: %s, idx+1+i: %s"%(idx, idx+i, idx+1+i))
+                print("x. idx: %s, idx+i: %s, idx+1+i: %s, imu: %s~%s"%(idx, idx+i, idx+1+i, idx-self.imu_seq_len+i, idx+1+i))
                 ## append image
                 x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i])) # (384, 512)
                 x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
@@ -394,7 +394,7 @@ class MyDataset():
             batch_y2.append(y2)
             
             ## Increase idx
-            #print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
+            print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
             idx = idx + 1
 
         batch_init_SE3 = np.array(batch_init_SE3)
@@ -539,11 +539,12 @@ def train():
     epoch = 5
     batch = 4
     timesteps = 4 # 2
-    start = 5
     imu_seq_len = 5
-
     mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', batch, timesteps, imu_seq_len)
-    
+    start = 5
+    end = len(mydataset)-(timesteps*batch)
+    step = timesteps-1
+
     model = Vinet()
     model.train()     
     
@@ -561,7 +562,7 @@ def train():
     total_i = 0
     with tools.TimerBlock("Start training") as block:
         for k in range(1, epoch+1):
-            for i in range(start, len(mydataset), timesteps-1):
+            for i in range(start, end, step):
                     #print(k, " ", i, " -> ", i+timesteps-1, end=" ")
                     img, imu, init_SE3, target_f2f, target_global = mydataset.load_img_bat(i)
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
@@ -582,12 +583,12 @@ def train():
                 
                     avgTime = block.avg()
                     #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
-                    remainingTime = int((epoch*len(mydataset)//batch*avgTime) - (k*total_i*avgTime))
+                    remainingTime = int((epoch*len(mydataset)*avgTime) - (k*total_i*avgTime))
                     rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
                                                           int(remainingTime//60%60), 
                                                           int(remainingTime%60))
 
-                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)//batch, loss.data[0], avgTime, rTime_str))
+                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, start+i, end//step, loss.data[0], avgTime, rTime_str))
                     
                     if(i%100==0):
                         check_str = "checkpoint_%02d.pt"%(k)
