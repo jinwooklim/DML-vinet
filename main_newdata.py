@@ -227,11 +227,12 @@ class SE3Comp(nn.Module):
         return out.view(mat_view.size()[0], mat.size()[1], -1)
 
 
-class MyDataset(Dataset):
+class MyDataset():
     
-    def __init__(self, base_dir, sequence, timesteps):
+    def __init__(self, base_dir, sequence, batch, timesteps, imu_seq_len):
         self.base_dir = base_dir
         self.sequence = sequence
+        self.batch = batch
         self.timesteps = timesteps
         self.base_path_img = self.base_dir + self.sequence + '/cam0/data/'
         
@@ -248,7 +249,7 @@ class MyDataset(Dataset):
 		## imu
         self.imu = self.readIMU_File('/imu0/data.csv')
         
-        self.imu_seq_len = 5
+        self.imu_seq_len = imu_seq_len
    
     def readTrajectoryFile(self, path):
         traj = []
@@ -299,9 +300,10 @@ class MyDataset(Dataset):
     def __len__(self):
         return len(self.trajectory_relative)
     
-    def __getitem__(self, idx):
+    
+    '''def __getitem__(self, idx):
         #print("init_SE3_idx : ", idx-self.timesteps, "\tidx : ", idx)
-        init_SE3 = self.getTrajectoryAbs(idx-self.timesteps) # (7,)
+        init_SE3 = self.getTrajectoryAbs(idx) # (7,)
         init_SE3 = np.expand_dims(init_SE3, axis=1) # (7,1)
         init_SE3 = np.expand_dims(init_SE3, axis=0) # (1, 7, 1)
         init_SE3 = Variable(torch.from_numpy(init_SE3).type(torch.FloatTensor))
@@ -311,8 +313,8 @@ class MyDataset(Dataset):
         for i in range(self.timesteps):
             #print("### timesteps_idx : ", idx)
             #print("img_idx : ", idx-self.timesteps+i, idx-self.timesteps+i+1)
-            x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx-1-i]))
-            x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx-i]))
+            x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx + i]))
+            x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1 + i]))
 
             ## 3 channels
             x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
@@ -322,35 +324,107 @@ class MyDataset(Dataset):
             timesteps_x.append(X)
 
             #print("IMU_idx : ", idx-self.timesteps+i+1-self.imu_seq_len, idx-self.timesteps+i+1)
-            tmp = np.array(self.imu[idx-self.timesteps+i+1-self.imu_seq_len : idx-self.timesteps+i+1])
+            #if(idx < self.start):
+            tmp = np.array(self.imu[idx-self.imu_seq_len+1 : i:idx+1 + i])
+            tmp = tmp.astype(np.float16)
             timesteps_imu.append(tmp)
         
-        print("%s || "%(idx), end=" ")
+        #print("%s || "%(idx), end=" ")
         #print("%s || x : "%(idx), np.shape(timesteps_x), end=" ")
         #print("imu ", np.shape(timesteps_imu))
-                
-        #print("y : ", idx-self.timesteps, idx)
-        y = self.trajectory_relative[idx-self.timesteps : idx]
-        y2 = self.trajectory_abs[idx-self.timesteps : idx]
         
         timesteps_x = np.array(timesteps_x)
         timesteps_imu = np.array(timesteps_imu)
-        
+        timesteps_imu = np.reshape(timesteps_imu, (self.timesteps, 6))
+        print(np.shape(timesteps_imu))
         X = Variable(torch.from_numpy(timesteps_x).type(torch.FloatTensor))
         X2 = Variable(torch.from_numpy(timesteps_imu).type(torch.FloatTensor))
-        
-        Y = Variable(torch.from_numpy(y).type(torch.FloatTensor))
-        Y = Y.view(self.timesteps, 6, 1)
-        
-        Y2 = Variable(torch.from_numpy(y2).type(torch.FloatTensor))
-        Y2 = Y2.view(self.timesteps, 7, 1)
+       
+        y = self.trajectory_relative[idx-self.timesteps+1 : idx+1]
+        y2 = self.trajectory_abs[idx] 
+        Y = Variable(torch.from_numpy(y).type(torch.FloatTensor)) #Y = Y.view(self.timesteps, 6, 1)
+        Y2 = Variable(torch.from_numpy(y2).type(torch.FloatTensor))#Y2 = Y2.view(7, 1)
 
+        print(X.shape)
+        print(X2.shape)
+        print(Y.shape)
+        print(Y2.shape)
+        return X, X2, init_SE3, Y, Y2
+    '''
+    
+    def load_img_bat(self, idx):
+        batch_init_SE3 = []
+        batch_x = []
+        batch_imu = []
+        batch_y = []
+        batch_y2 = []
+        for bidx in range(self.batch):
+            timesteps_x = []
+            timesteps_imu = []
+            for i in range(self.timesteps):
+                #print("x. idx: %s, idx+i: %s, idx+1+i: %s"%(idx, idx+i, idx+1+i))
+                ## append image
+                x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i])) # (384, 512)
+                x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
+                x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1]) # (3, 384, 512)
+                x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2]) # (3, 384, 512)
+                x_data_np_1 = np.expand_dims(x_data_np_1, axis=0)
+                x_data_np_2 = np.expand_dims(x_data_np_2, axis=0)
+                X = np.concatenate((x_data_np_1, x_data_np_2), axis=0) # (1, 3, 384, 512) -> (2, 3, 384, 512)
+                timesteps_x.append(X)
+
+                ## append imu
+                tmp = np.array(self.imu[idx-self.imu_seq_len+i : idx+1+i])
+                tmp = tmp.astype(np.float16)
+                timesteps_imu.append(tmp)
+
+            ## append init SE3
+            init_SE3 = self.getTrajectoryAbs(idx) # (7,)
+            batch_init_SE3.append(init_SE3)
+
+            batch_x. append(timesteps_x)
+            batch_imu.append(timesteps_imu)
+
+            ## append y
+            y = self.trajectory_relative[idx+1 : idx+self.timesteps+1] # answer is t+1
+            batch_y.append(y)
+            
+            ## append y2
+            y2 = self.trajectory_abs[idx+self.timesteps] # answer is t+1
+            batch_y2.append(y2)
+            
+            ## Increase idx
+            #print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
+            idx = idx + 1
+
+        batch_init_SE3 = np.array(batch_init_SE3)
+        batch_init_SE3 = np.reshape(batch_init_SE3, (self.batch, 7))
+        batch_init_SE3 = Variable(torch.from_numpy(batch_init_SE3).type(torch.FloatTensor))
+        batch_init_SE3 = batch_init_SE3.view(self.batch, 7, 1)
+        
+        batch_x = np.array(batch_x)
+        batch_imu = np.array(batch_imu)
+        X = Variable(torch.from_numpy(batch_x).type(torch.FloatTensor).cuda())
+        X2 = Variable(torch.from_numpy(batch_imu).type(torch.FloatTensor).cuda())
+        
+        batch_y = np.array(batch_y)
+        #print("2. ", np.shape(batch_y))
+        batch_y2 = np.array(batch_y2)
+        batch_y = np.expand_dims(batch_y, axis=3) # (batch, timesteps, 6, 1)
+        Y = Variable(torch.from_numpy(batch_y).type(torch.FloatTensor).cuda())
+        #print("3. ", Y.shape)
+        Y = Y.view(self.batch, self.timesteps, 6, 1)
+
+        #batch_y2 = np.expand_dims(batch_y2, axis=3) # (batch, 7)
+        Y2 = Variable(torch.from_numpy(batch_y2).type(torch.FloatTensor).cuda())
+        Y2 = Y2.view(self.batch, 7, 1)
+        
         #print(X.shape)
         #print(X2.shape)
         #print(Y.shape)
         #print(Y2.shape)
-        #print("get data")
-        return X, X2, init_SE3, Y, Y2
+        return X, X2, batch_init_SE3, Y, Y2
+
 
     
 class Vinet(nn.Module):
@@ -420,9 +494,11 @@ class Vinet(nn.Module):
         l_out1 = self.linear1(r_out) # (batch_size, timesteps, 128)
         se3 = self.linear2(l_out1) # (batch_size, timesteps, 6)
         se3 = se3.view(batch_size, timesteps, 6, 1)
+        last_se3 = self.linear2(l_out1[:, -1, :])
+        last_se3 = last_se3.view(batch_size, 6, 1)
 
-        ### TODO : original
         ## SE3 Composition layer
+        ''' 
         batch_composed_SE3 = []
         in_se3 = None
         for b in range(batch_size):
@@ -435,7 +511,16 @@ class Vinet(nn.Module):
         batch_composed_SE3 = torch.stack(batch_composed_SE3)
         #print("se3 : ", se3.shape)
         #print("composed_SE3 : ", batch_composed_SE3.shape)
-        return se3, batch_composed_SE3
+        '''
+        
+        ## SE3 Composition layer
+        in_SE3 = init_SE3 # (batch, 7, 1), from dataset
+        composed_SE3 = self.SE3layer(in_SE3, last_se3.data.cpu()) # (batch, 7, 1) , (batch, 6 , 1)-> from main LSTM stream
+
+        #print("last_se3 : ", last_se3.shape)
+        #print("composed_SE3 : ", composed_SE3.shape)
+
+        return se3, composed_SE3
     
     
 def model_out_to_flow_png(output):
@@ -451,16 +536,13 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 10
-    batch = 8
+    epoch = 5
+    batch = 4
     timesteps = 4 # 2
+    start = 5
+    imu_seq_len = 5
 
-    mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', timesteps)
-    train_data_loader = DataLoader(dataset=mydataset, \
-                                    batch_size=batch, \
-                                    shuffle=False, \
-                                    num_workers=0, \
-                                    drop_last=False)
+    mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', batch, timesteps, imu_seq_len)
     
     model = Vinet()
     model.train()     
@@ -476,21 +558,18 @@ def train():
     
     init_SE3 = None
 
+    total_i = 0
     with tools.TimerBlock("Start training") as block:
-        total_i = 0
         for k in range(1, epoch+1):
-            i = 0
-            it = iter(train_data_loader)
-            while(True):
-                i = i + 1
-                try:
-                    img, imu, init_SE3, target_f2f, target_global = next(it)
+            for i in range(start, len(mydataset), timesteps-1):
+                    #print(k, " ", i, " -> ", i+timesteps-1, end=" ")
+                    img, imu, init_SE3, target_f2f, target_global = mydataset.load_img_bat(i)
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
                     optimizer.zero_grad()
-
+                    
                     ## LSTM part Forward
                     se3, composed_SE3 = model(img, imu, init_SE3) # (batch, 6)
-
+                    
                     ## (F2F loss) + (Global pose loss)
                     ## Global pose: Full concatenated pose relative to the start of the sequence
              	    ## (batch, timesteps, 6, 1) // (batch, timesteps, 7, 1)
@@ -513,17 +592,9 @@ def train():
                     if(i%100==0):
                         check_str = "checkpoint_%02d.pt"%(k)
                         torch.save(model.state_dict(), check_str)
-                
-                except TypeError as e:
-                    print("idx is too small : %s, %s"%(k, i*batch))
-                    next(it)
-                except RuntimeError as e:
-                    print("RuntimeError : %s, %s"%(k, i*batch))
-                    next(it)
-                except StopIteration as e:
-                    total_i = total_i + i
-                    break
-                     
+
+            total_i = total_i + len(mydataset)-1-start
+
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
     #torch.save(model.state_dict(), 'vinet_v1_01.pt')
@@ -542,55 +613,26 @@ def test():
         print('No checkpoint')
     
     batch = 1
-    timesteps = 1
+    timesteps = 4
+    start = 5
+    imu_seq_len = 5
     model = Vinet()
     model.load_state_dict(checkpoint)  
     model.cuda()
     model.eval()
     
     datapath = "V2_01_easy"
-    mydataset = MyDataset('/notebooks/data/', datapath, timesteps)
+    mydataset = MyDataset('/notebooks/data/', datapath, batch, timesteps, img_seq_len)
     
     err = 0
     err2 = 0
     ans = []
     ans2 = []
 
-    start = 5
-    test_data_loader = DataLoader(dataset = mydataset, \
-                                    batch_size = batch, \
-                                    shuffle = False, \
-                                    num_workers = 0, \
-                                    drop_last = False)
-
     init_SE3 = None
-    i = 0
-    it = iter(test_data_loader)
-    
-    for i in range(start):
-        try:
-            next(it)
-        except TypeError as e:
-            #print("idx is too small : %s"%(i*batch))
-            next(it)
-        except RuntimeError as e:
-            #print("RuntimeError : %s"%(i*batch))
-            pass
-
-    print("Second while")
-    while(True):
-        i = i + 1
-        try:
-            img, imu, init_SE3, target_f2f, target_global = next(it)
-        except TypeError as e:
-            print("idx is too small : %s"%(i*batch))
-            next(it)
-        except RuntimeError as e:
-            print("RuntimeError : %s"%(i*batch))
-        except StopIteration as e:
-            print("end")
-            break
-
+   
+    for i in range(start, len(mydataset), timesteps-1): 
+        img, imu, init_SE3, target_f2f, target_global = mydataset.load_img_bat(i)
         img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
             
         ## LSTM part forward
@@ -638,9 +680,9 @@ def test():
 
     
 def main():
-    #train()
+    train()
           
-    test()
+    #test()
 
 
 if __name__ == '__main__':
