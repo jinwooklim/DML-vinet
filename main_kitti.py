@@ -412,7 +412,7 @@ class Vinet(nn.Module):
     def __init__(self):
         super(Vinet, self).__init__()
         self.rnn = nn.LSTM(
-            input_size=61442, #49158, #12301, #49152,#24576, 
+            input_size=61446, #61442, #49158, #12301, #49152,#24576, 
             hidden_size=1024,#64, 
             num_layers=2,
             batch_first=True)
@@ -420,7 +420,7 @@ class Vinet(nn.Module):
         
         self.rnnIMU = nn.LSTM(
             input_size=2,
-            hidden_size=2,
+            hidden_size=6,
             num_layers=2,
             batch_first=True)
         self.rnnIMU.cuda()
@@ -531,10 +531,11 @@ def train():
     model.train()     
     
     #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.1)
+    #optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.1)
+    optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
     criterion  = nn.MSELoss(size_average=False)
-    #criterion  = nn.MSELoss()   
+    #riterion  = nn.MSELoss()   
     
     writer = SummaryWriter()
     startT = time.time() 
