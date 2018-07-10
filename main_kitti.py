@@ -479,6 +479,7 @@ class Vinet(nn.Module):
         last_se3 = last_se3.view(batch_size, 6, 1)
 
         ## SE3 Composition layer
+        ## TODO Version 1.
         ''' 
         batch_composed_SE3 = []
         in_se3 = None
@@ -495,13 +496,33 @@ class Vinet(nn.Module):
         '''
         
         ## SE3 Composition layer
+        ## TODO Version 2.
+        '''
         in_SE3 = init_SE3 # (batch, 7, 1), from dataset
         composed_SE3 = self.SE3layer(in_SE3, last_se3.data.cpu()) # (batch, 7, 1) , (batch, 6 , 1)-> from main LSTM stream
-
         #print("last_se3 : ", last_se3.shape)
         #print("composed_SE3 : ", composed_SE3.shape)
-
         return se3, composed_SE3
+        '''
+
+        ## TODO Version 3.
+        batch_last_composed_SE3 = []
+        for b in range(batch_size):
+            for t in range(timesteps):
+                if(t==0):
+                    in_SE3 = init_SE3[b, ...] # init_SE3 == (7, 1)
+                    in_SE3 = in_SE3.view(1, 7, 1)
+                    temp_se3 = se3.data.cpu()[b, t, ...]
+                    temp_se3 = temp_se3.view(1, 6, 1)
+                    in_SE3 = self.SE3layer(in_SE3, temp_se3)
+                else:
+                    temp_se3 = se3.data.cpu()[b, t, ...]
+                    temp_se3 = temp_se3.view(1, 6, 1)
+                    in_SE3 = self.SE3layer(in_SE3, temp_se3)
+            batch_last_composed_SE3.append(in_SE3)
+        batch_last_composed_SE3 = torch.stack(batch_last_composed_SE3)
+        batch_last_composed_SE3 = batch_last_composed_SE3.view(batch_size, 7, 1)
+        return se3, batch_last_composed_SE3
     
     
 def model_out_to_flow_png(output):
@@ -530,12 +551,12 @@ def train():
     model = Vinet()
     model.train()     
     
-    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     #optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.1)
-    optimizer = optim.Adam(model.parameters(), lr = 0.001)
+    #optimizer = optim.Adam(model.parameters(), lr = 0.001)
     
-    criterion  = nn.MSELoss(size_average=False)
-    #riterion  = nn.MSELoss()   
+    #criterion  = nn.MSELoss(size_average=False)
+    criterion  = nn.MSELoss()   
     
     writer = SummaryWriter()
     startT = time.time() 
