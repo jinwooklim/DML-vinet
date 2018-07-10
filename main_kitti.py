@@ -1,5 +1,6 @@
-# python2.7
+# -*- coding: utf-8 -*-
 import os
+import argparse
 import torch 
 import torch.nn as nn
 from torch.autograd import Variable
@@ -18,6 +19,10 @@ import flowlib
 import csv
 import time
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--istrain', action='store_true', dest='istrain', default=False)
+parser.add_argument('--istest', action='store_true', dest='istest', default=False)
+FLAGS = parser.parse_args()
 
 class SE3Comp(nn.Module):
     def __init__(self):
@@ -226,15 +231,13 @@ class SE3Comp(nn.Module):
         out = mat_view * vec
         return out.view(mat_view.size()[0], mat.size()[1], -1)
 
-
-
 def toQuaternion(yaw, pitch, roll):
     cy = np.cos(yaw*0.5)
     sy = np.sin(yaw*0.5)
-    cr =np.cos(roll * 0.5)
-    sr = np.sin(roll * 0.5)
-    cp = np.cos(pitch * 0.5)
-    sp = np.sin(pitch * 0.5)
+    cr = np.cos(roll*0.5)
+    sr = np.sin(roll*0.5)
+    cp = np.cos(pitch*0.5)
+    sp = np.sin(pitch*0.5)
 
     qw = cy * cr * cp + sy * sr * sp
     qx = cy * sr * cp - sy * cr * sp
@@ -243,15 +246,15 @@ def toQuaternion(yaw, pitch, roll):
 
     return [qw, qx, qy, qz]
 
-
-class MyDataset(Dataset):
+class MyDataset():
     
-    def __init__(self, base_dir, sequence, timesteps):
+    def __init__(self, base_dir, sequence, batch, timesteps, imu_seq_len):
         self.base_dir = base_dir
         self.sequence = sequence
+        self.batch = batch
         self.timesteps = timesteps
         #self.base_path_img = self.base_dir + self.sequence + '/cam0/data/'
-        self.base_path_img = os.path.join(self.base_dir, 'KITTI_odobetry', 'dataset', 'sequences', sequence, 'image_2')
+        self.base_path_img = os.path.join(self.base_dir, 'KITTI_odometry', 'dataset', 'sequences', sequence, 'image_2')
         
         
         #self.data_files = os.listdir(self.base_dir + self.sequence + '/cam0/data/')
@@ -260,25 +263,28 @@ class MyDataset(Dataset):
         
         ## relative camera pose
         #self.trajectory_relative = self.read_R6TrajFile('/vicon0/sampled_relative_R6.csv')
-        self.trajectory_relative = self.read_R6TrajFile(os.path.join("relative_pose", sequence+".txt"))
+        self.trajectory_relative = self.read_R6TrajFile(os.path.join("relative_pose", self.sequence + ".txt"))
         
-        ## abosolute camera pose (global)
+		## abosolute camera pose (global)
         #self.trajectory_abs = self.readTrajectoryFile('/vicon0/sampled.csv')
-        self.trajectory_abs = self.readTrajectoryFile(os.path.join("pose_new", sequence+".txt"))
+        self.trajectory_abs = self.readTrajectoryFile(os.path.join("pose_new", self.sequence+".txt"))
         
-        ## imu
+		## imu
         #self.imu = self.readIMU_File('/imu0/data.csv')
-        self.imu = self.readIMU_File(os.path.join("virtual_obd", sequence, "0.txt"))
+        self.imu = self.readIMU_File(os.path.join("virtual_obd", self.sequence, "0.txt"))
         
-        self.imu_seq_len = 1 #5
+        self.imu_seq_len = imu_seq_len
    
     def readTrajectoryFile(self, path):
         traj = []
-        with open(self.base_dir + self.sequence + path) as csvfile:
-            spamreader = csv.reader(csvfile, delimiter=',', quotechar='|')
+        #with open(self.base_dir + self.sequence + path) as csvfile:
+        with open(self.base_dir + path) as csvfile:
+            spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
             for row in spamreader:
-                # x, y, z, yaw, pitch, roll -> x, y, z, ww, wx, wy, wz
-                quaternion = toQuaternion(-float(row[3], float(row[4]), float(row[5]))
+                ## x, y, z, yaw, pitch, roll -> x, y, z, ww, wx, wy, wz
+                quaternion = toQuaternion(-float(row[3]), float(row[4]), float(row[5]))
+                #parsed = [float(row[1]), float(row[2]), float(row[3]), 
+                #          float(row[4]), float(row[5]), float(row[6]), float(row[7])]
                 parsed = [float(row[2]), -float(row[0]), float(row[1]), quaternion[0], quaternion[1], quaternion[2], quaternion[3]]
                 traj.append(parsed)
                 
@@ -286,13 +292,14 @@ class MyDataset(Dataset):
     
     def read_R6TrajFile(self, path):
         traj = []
-        with open(self.base_dir + self.sequence + path) as csvfile:
-            spamreader = csv.reader(csvfile, delimiter=',', quotechar='|')
+        #with open(self.base_dir + self.sequence + path) as csvfile:
+        with open(self.base_dir + path) as csvfile:
+            spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
             for row in spamreader:
                 #parsed = [float(row[1]), float(row[2]), float(row[3]), 
                 #          float(row[4]), float(row[5]), float(row[6])]
-                parsed = [float(row[2]), -float(row[0]), float(row[1]), 
-                          -float(row[3]), float(row[4]), float(row[5])]
+                parsed = [float(row[2]), -float(row[0]), float(row[1]), \
+                            -float(row[3]), float(row[4]), float(row[5])]
                 traj.append(parsed)
                 
         return np.array(traj)
@@ -300,9 +307,12 @@ class MyDataset(Dataset):
     def readIMU_File(self, path):
         imu = []
         count = 0
-        with open(self.base_dir + self.sequence + path) as csvfile:
+        #with open(self.base_dir + self.sequence + path) as csvfile:
+        with open(self.base_dir + path) as csvfile:
             spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
             for row in spamreader:
+                #parsed = [float(row[1]), float(row[2]), float(row[3]), 
+                #          float(row[4]), float(row[5]), float(row[6])]
                 parsed = [float(row[0]), float(row[1])]
                 imu.append(parsed)
         return np.array(imu)
@@ -319,72 +329,98 @@ class MyDataset(Dataset):
     def __len__(self):
         return len(self.trajectory_relative)
     
-    def __getitem__(self, idx):
-        #print("init_SE3_idx : ", idx-self.timesteps, "\tidx : ", idx)
-        init_SE3 = self.getTrajectoryAbs(idx-self.timesteps) # (7,)
-        init_SE3 = np.expand_dims(init_SE3, axis=1) # (7,1)
-        init_SE3 = np.expand_dims(init_SE3, axis=0) # (1, 7, 1)
-        init_SE3 = Variable(torch.from_numpy(init_SE3).type(torch.FloatTensor))
+    def load_img_bat(self, idx):
+        batch_init_SE3 = []
+        batch_x = []
+        batch_imu = []
+        batch_y = []
+        batch_y2 = []
+        for bidx in range(self.batch):
+            timesteps_x = []
+            timesteps_imu = []
+            for i in range(self.timesteps):
+                #print("x. idx: %s, idx+i: %s, idx+1+i: %s, imu: %s~%s"%(idx, idx+i, idx+1+i, idx-self.imu_seq_len+i, idx+1+i))
+                ## append image
+                image01 = Image.open(os.path.join(self.base_path_img, self.data_files[idx+i]))
+                image02 = Image.open(os.path.join(self.base_path_img, self.data_files[idx+1+i]))
+                image01 = image01.resize((620, 376), resample=Image.BICUBIC)
+                image02 = image02.resize((620, 376), resample=Image.BICUBIC)
+                x_data_np_1 = np.array(image01) # (376, 620, 3)
+                x_data_np_2 = np.array(image02) # (376, 620, 3)
+                x_data_np_1 = np.reshape(x_data_np_1, (3, 376, 620))
+                x_data_np_2 = np.reshape(x_data_np_2, (3, 376, 620))
+                x_data_np_1 = np.expand_dims(x_data_np_1, axis=0)
+                x_data_np_2 = np.expand_dims(x_data_np_2, axis=0)
+                X = np.concatenate((x_data_np_1, x_data_np_2), axis=0) # (1, 3, 384, 512) -> (2, 3, 384, 512)
+                timesteps_x.append(X)
 
-        timesteps_x = []
-        timesteps_imu =[]
-        for i in range(self.timesteps):
-            #print("### timesteps_idx : ", idx)
-            #print("img_idx : ", idx-self.timesteps+i, idx-self.timesteps+i+1)
-            image01 = Image.open(os.path.join(self.base_path_img, self.data_files[idx-1-i]))
-            image02 = Image.open(os.path.join(self.base_path_img, self.data_files[idx-i]))
-            image01 = image01.resize((620, 376), resample=Image.BICUBIC)
-            image02 = image02.resize((620, 376), resample=Image.BICUBIC)
-            x_data_np_1 = np.array(image01)
-            x_data_np_2 = np.array(image02)
+                ## append imu
+                tmp = np.array(self.imu[idx-self.imu_seq_len+i : idx+1+i])
+                tmp = tmp.astype(np.float16)
+                timesteps_imu.append(tmp)
 
-            ## 3 channels
-            x_data_np_1 = np.array([x_data_np_1, x_data_np_1, x_data_np_1])
-            x_data_np_2 = np.array([x_data_np_2, x_data_np_2, x_data_np_2])
+            ## append init SE3
+            init_SE3 = self.getTrajectoryAbs(idx) # (7,)
+            batch_init_SE3.append(init_SE3)
 
-            X = np.array([x_data_np_1, x_data_np_2])
-            timesteps_x.append(X)
+            batch_x. append(timesteps_x)
+            batch_imu.append(timesteps_imu)
 
-            #print("IMU_idx : ", idx-self.timesteps+i+1-self.imu_seq_len, idx-self.timesteps+i+1)
-            tmp = np.array(self.imu[idx-self.timesteps+i+1-self.imu_seq_len : idx-self.timesteps+i+1])
-            timesteps_imu.append(tmp)
-                
-        #print("y : ", idx-self.timesteps, idx)
-        y = self.trajectory_relative[idx-self.timesteps : idx]
-        y2 = self.trajectory_abs[idx-self.timesteps : idx]
+            ## append y
+            y = self.trajectory_relative[idx+1 : idx+self.timesteps+1] # answer is t+1
+            batch_y.append(y)
+            
+            ## append y2
+            y2 = self.trajectory_abs[idx+self.timesteps] # answer is t+1
+            batch_y2.append(y2)
+            
+            ## Increase idx
+            #print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
+            idx = idx + 1
+
+        batch_init_SE3 = np.array(batch_init_SE3)
+        batch_init_SE3 = np.reshape(batch_init_SE3, (self.batch, 7))
+        batch_init_SE3 = Variable(torch.from_numpy(batch_init_SE3).type(torch.FloatTensor))
+        batch_init_SE3 = batch_init_SE3.view(self.batch, 7, 1)
         
-        timesteps_x = np.array(timesteps_x)
-        timesteps_imu = np.array(timesteps_imu)
+        batch_x = np.array(batch_x)
+        batch_imu = np.array(batch_imu)
+        X = Variable(torch.from_numpy(batch_x).type(torch.FloatTensor).cuda())
+        X2 = Variable(torch.from_numpy(batch_imu).type(torch.FloatTensor).cuda())
         
-        X = Variable(torch.from_numpy(timesteps_x).type(torch.FloatTensor))
-        X2 = Variable(torch.from_numpy(timesteps_imu).type(torch.FloatTensor))
-        
-        Y = Variable(torch.from_numpy(y).type(torch.FloatTensor))
-        Y = Y.view(self.timesteps, 6, 1)
-        
-        Y2 = Variable(torch.from_numpy(y2).type(torch.FloatTensor))
-        Y2 = Y2.view(self.timesteps, 7, 1)
+        batch_y = np.array(batch_y)
+        #print("2. ", np.shape(batch_y))
+        batch_y2 = np.array(batch_y2)
+        batch_y = np.expand_dims(batch_y, axis=3) # (batch, timesteps, 6, 1)
+        Y = Variable(torch.from_numpy(batch_y).type(torch.FloatTensor).cuda())
+        #print("3. ", Y.shape)
+        Y = Y.view(self.batch, self.timesteps, 6, 1)
 
+        #batch_y2 = np.expand_dims(batch_y2, axis=3) # (batch, 7)
+        Y2 = Variable(torch.from_numpy(batch_y2).type(torch.FloatTensor).cuda())
+        Y2 = Y2.view(self.batch, 7, 1)
+        
         #print(X.shape)
         #print(X2.shape)
         #print(Y.shape)
         #print(Y2.shape)
-        return X, X2, init_SE3, Y, Y2
+        return X, X2, batch_init_SE3, Y, Y2
+
 
     
 class Vinet(nn.Module):
     def __init__(self):
         super(Vinet, self).__init__()
         self.rnn = nn.LSTM(
-            input_size=49158, #12301, #49152,#24576, 
+            input_size=61442, #49158, #12301, #49152,#24576, 
             hidden_size=1024,#64, 
             num_layers=2,
             batch_first=True)
         self.rnn.cuda()
         
         self.rnnIMU = nn.LSTM(
-            input_size=6, 
-            hidden_size=6,
+            input_size=2,
+            hidden_size=2,
             num_layers=2,
             batch_first=True)
         self.rnnIMU.cuda()
@@ -439,9 +475,11 @@ class Vinet(nn.Module):
         l_out1 = self.linear1(r_out) # (batch_size, timesteps, 128)
         se3 = self.linear2(l_out1) # (batch_size, timesteps, 6)
         se3 = se3.view(batch_size, timesteps, 6, 1)
+        last_se3 = self.linear2(l_out1[:, -1, :])
+        last_se3 = last_se3.view(batch_size, 6, 1)
 
-        ### TODO : original
         ## SE3 Composition layer
+        ''' 
         batch_composed_SE3 = []
         in_se3 = None
         for b in range(batch_size):
@@ -454,7 +492,16 @@ class Vinet(nn.Module):
         batch_composed_SE3 = torch.stack(batch_composed_SE3)
         #print("se3 : ", se3.shape)
         #print("composed_SE3 : ", batch_composed_SE3.shape)
-        return se3, batch_composed_SE3
+        '''
+        
+        ## SE3 Composition layer
+        in_SE3 = init_SE3 # (batch, 7, 1), from dataset
+        composed_SE3 = self.SE3layer(in_SE3, last_se3.data.cpu()) # (batch, 7, 1) , (batch, 6 , 1)-> from main LSTM stream
+
+        #print("last_se3 : ", last_se3.shape)
+        #print("composed_SE3 : ", composed_SE3.shape)
+
+        return se3, composed_SE3
     
     
 def model_out_to_flow_png(output):
@@ -470,49 +517,42 @@ def model_out_to_flow_png(output):
 
 
 def train():
-    epoch = 10
-    batch = 8
+    epoch = 5
+    batch = 4
     timesteps = 4 # 2
-    start = 10 # 7
-    #end = len(mydataset)-timesteps
+    imu_seq_len = 3
+    #mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', batch, timesteps, imu_seq_len)
+    mydataset = MyDataset('/notebooks/data/Total_Data/', '00', batch, timesteps, imu_seq_len)
+    start = 5
+    end = len(mydataset)-(timesteps*batch)
+    step = timesteps-1
+
     model = Vinet()
+    model.train()     
     
     #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.2)
+    optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.1)
     
-    criterion  = nn.MSELoss()
-    #criterion  = nn.L1Loss(size_average=False)
-    #criterion  = nn.MSELoss(size_average=False)
+    criterion  = nn.MSELoss(size_average=False)
+    #criterion  = nn.MSELoss()   
     
     writer = SummaryWriter()
     startT = time.time() 
     
-    model.train()
-
-    #mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V1_01_easy', timesteps)
-    mydataset = MyDataset('/notebooks/data/Total_Data/', '00', timesteps)
-    train_data_loader = DataLoader(dataset=mydataset, \
-                                    batch_size=batch, \
-                                    shuffle=False, \
-                                    num_workers=0, \
-                                    drop_last=False)
-    
     init_SE3 = None
-    
+
+    total_i = 0
     with tools.TimerBlock("Start training") as block:
-        total_i = 0
         for k in range(1, epoch+1):
-            i = 1
-            it = iter(train_data_loader)
-            while(True):
-                try:
-                    img, imu, init_SE3, target_f2f, target_global = next(it)
+            for i in range(start, end, step):
+                    #print(k, " ", i, " -> ", i+timesteps-1, end=" ")
+                    img, imu, init_SE3, target_f2f, target_global = mydataset.load_img_bat(i)
                     img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
                     optimizer.zero_grad()
-
+                    
                     ## LSTM part Forward
                     se3, composed_SE3 = model(img, imu, init_SE3) # (batch, 6)
-
+                    
                     ## (F2F loss) + (Global pose loss)
                     ## Global pose: Full concatenated pose relative to the start of the sequence
              	    ## (batch, timesteps, 6, 1) // (batch, timesteps, 7, 1)
@@ -522,33 +562,26 @@ def train():
 
                     loss.backward()
                     optimizer.step()
-                
-                    avgTime = block.avg()
-                    #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
-                    remainingTime = int((epoch*len(mydataset)//batch*avgTime) - (k*total_i*avgTime))
-                    rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
-                                                          int(remainingTime//60%60), 
-                                                          int(remainingTime%60))
 
-                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, i, len(mydataset)//batch, loss.data[0], avgTime, rTime_str))
+                    #avgTime = block.avg()
+                    #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
+                    #remainingTime = int((epoch*len(mydataset)*avgTime) - (k*total_i*avgTime))
+                    #rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
+                    #                                      int(remainingTime//60%60), 
+                    #                                      int(remainingTime%60))
+
+                    #block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, start+i, end, loss.data[0], avgTime, rTime_str))
+                    
+                    now = time.localtime()
+                    print("Train Epoch: {} iter: {}/{} \t Loss: {:.6f}".format(k, start+i, end, loss.data[0]), end=" ")
+                    print("\t Time: %02d-%02d %02d:%02d:%02d"%(now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec))
                     
                     if(i%100==0):
-                        check_str = 'checkpoint_{}.pt'.format(k)
+                        check_str = "checkpoint_%02d.pt"%(k)
                         torch.save(model.state_dict(), check_str)
-                    i = i + 1
-                
-                except TypeError as e:
-                    print("idx is too small : %s, %s"%(k, i*batch))
-                    i = i + 1
-                    next(it)
-                except RuntimeError as e:
-                    print("RuntimeError : %s, %s"%(k, i*batch))
-                    i = i + 1
-                    next(it)
-                except StopIteration as e:
-                    total_i = total_i + i
-                    break
-                     
+
+            total_i = total_i + len(mydataset)-1-start
+
     #torch.save(model, 'vinet_v1_01.pt')
     #model.save_state_dict('vinet_v1_01.pt')
     #torch.save(model.state_dict(), 'vinet_v1_01.pt')
@@ -558,7 +591,7 @@ def train():
 
 def test():
     #checkpoint_pytorch = '/notebooks/vinet/vinet_v1_01.pt'
-    checkpoint_pytorch = '/notebooks/vinet/checkpoint_9.pt'
+    checkpoint_pytorch = '/notebooks/vinet/backup/checkpoint_05.pt'
     if os.path.isfile(checkpoint_pytorch):
         checkpoint = torch.load(checkpoint_pytorch,\
                             map_location=lambda storage, loc: storage.cuda(0))
@@ -566,48 +599,57 @@ def test():
     else:
         print('No checkpoint')
     
-    batch = 2
-    model = Vinet(batch=batch)
-    se3Layer = SE3Comp()
+    batch = 1
+    timesteps = 4
+    imu_seq_len = 5
+    datapath = "V2_01_easy"
+    mydataset = MyDataset('/notebooks/data/', datapath, batch, timesteps, imu_seq_len)
+    start = 5
+    end = len(mydataset)-(timesteps*batch)
+    step = timesteps-1
+
+    model = Vinet()
     model.load_state_dict(checkpoint)  
     model.cuda()
     model.eval()
-    #mydataset = MyDataset('/notebooks/EuRoC_modify/', 'V2_01_easy')
-    datapath = "V2_01_easy"
-    mydataset = MyDataset('/notebooks/data/', datapath)
     
     err = 0
+    err2 = 0
     ans = []
-    abs_traj = None
-    start = 5
-    #for i in range(start, len(mydataset)-batch):
-    for i in range(start, 100):
-        data, data_imu, target_f2f, target_global = mydataset.load_img_bat(i, batch)
-        data, data_imu, target_f2f, target_global = data.cuda(), data_imu.cuda(), target_f2f.cuda(), target_global.cuda()
+    ans2 = []
 
-        ## First data for SE3 Composition layer
-        if i == start:
-            ## load first SE3 pose xyzQuaternion
-            abs_traj = mydataset.getTrajectoryAbs(start, batch)
-            abs_traj_SE3 = np.expand_dims(abs_traj, axis=2) # (x, y, z, w, wx, wy, wz)
-            abs_traj_SE3 = Variable(torch.from_numpy(abs_traj_SE3).type(torch.FloatTensor).cuda()) 
-                    
+    init_SE3 = None
+   
+    for i in range(start, end, step): 
+        img, imu, init_SE3, target_f2f, target_global = mydataset.load_img_bat(i)
+        img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
+            
         ## LSTM part forward
-        se3 = model(data, data_imu, abs_traj_SE3) # (v1, v2, v3, v4 ,v5, v6)
-        se3 = se3.unsqueeze(2) # (batch, 6, 1)
-        
+        se3, composed_SE3 = model(img, imu, init_SE3) # (batch, 6)
+
+        #print(type(se3))
+        #print(type(composed_SE3))
+        #exit()
+
         ## SE part
-        abs_traj_SE3 = se3Layer(abs_traj_SE3.data.cpu(), se3.data.cpu())
-        abs_traj_SE3 = Variable(abs_traj_SE3) # (batch, 7, 1)
-	    
         err += float(((target_f2f - se3) ** 2).mean()) # mean((x-X)^2)
-        print(err)
-	    ## Convert se3(v1, v2, v3, v4, v5, v6) -> xyzQ
-        #xyzq = se3qua.se3R6toxyzQ(se3.data.cpu().numpy())
-        #ans.append(xyzq)
-        #print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
+        #print(err)
         
-    print('Final err = {}'.format(err/(len(mydataset)-1)))  
+        err2 += float(((target_global.cpu().data.numpy() - composed_SE3.cpu().data.numpy()) ** 2).mean()) # mean((x-X)^2)
+        #print(err2)
+        
+        print("idx {}| Rel Err: {:.8f} \t Abs Err: {:.8f}".format(i+start, err, err2))
+        
+	    ## Convert se3(v1, v2, v3, v4, v5, v6) -> xyzQ
+        ## TODO Processing batch : implements
+        ##xyzq = se3qua.se3R6toxyzQ(se3.data.cpu().numpy())
+        ##print(xyzq)
+        ##ans.append(xyzq)
+        #print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
+
+    print('Total Rel err = {}'.format(err/(len(mydataset)-1)))  
+    print('Total Abs err2 = {}'.format(err2/(len(mydataset)-1)))  
+    
     #trajectoryAbs = mydataset.getTrajectoryAbsAll()
     #print(trajectoryAbs[0])
     #x = trajectoryAbs[0].astype(str)
@@ -624,13 +666,13 @@ def test():
     #        print(tmpStr)
     #        print(type(tmpStr))
     #        f.write(tmpStr + '\n')      
-   
+
     
 def main():
-    train()
-          
-    #test()
-
+    if(FLAGS.istrain):
+        train()
+    if(FLAGS.istest):  
+        test()
 
 if __name__ == '__main__':
     main()
