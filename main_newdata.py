@@ -362,7 +362,7 @@ class MyDataset():
             timesteps_x = []
             timesteps_imu = []
             for i in range(self.timesteps):
-                print("x. idx: %s, idx+i: %s, idx+1+i: %s, imu: %s~%s"%(idx, idx+i, idx+1+i, idx-self.imu_seq_len+i, idx+1+i))
+                #print("x. idx: %s, idx+i: %s, idx+1+i: %s, imu: %s~%s"%(idx, idx+i, idx+1+i, idx-self.imu_seq_len+i, idx+1+i))
                 ## append image
                 x_data_np_1 = np.array(Image.open(self.base_path_img + self.data_files[idx+i])) # (384, 512)
                 x_data_np_2 = np.array(Image.open(self.base_path_img + self.data_files[idx+1+i]))
@@ -394,7 +394,7 @@ class MyDataset():
             batch_y2.append(y2)
             
             ## Increase idx
-            print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
+            #print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
             idx = idx + 1
 
         batch_init_SE3 = np.array(batch_init_SE3)
@@ -580,15 +580,19 @@ def train():
 
                     loss.backward()
                     optimizer.step()
-                
-                    avgTime = block.avg()
-                    #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
-                    remainingTime = int((epoch*len(mydataset)*avgTime) - (k*total_i*avgTime))
-                    rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
-                                                          int(remainingTime//60%60), 
-                                                          int(remainingTime%60))
 
-                    block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, start+i, end//step, loss.data[0], avgTime, rTime_str))
+                    #avgTime = block.avg()
+                    #remainingTime = int((batch_num*epoch - (i + batch_num*k)) * avgTime)
+                    #remainingTime = int((epoch*len(mydataset)*avgTime) - (k*total_i*avgTime))
+                    #rTime_str = "{:02d}:{:02d}:{:02d}".format(int(remainingTime/60//60), 
+                    #                                      int(remainingTime//60%60), 
+                    #                                      int(remainingTime%60))
+
+                    #block.log('Train Epoch: {} iter: {}/{} \t Loss: {:.6f}, TimeAvg: {:.4f}, Remaining: {}'.format(k, start+i, end, loss.data[0], avgTime, rTime_str))
+                    
+                    now = time.localtime()
+                    print("Train Epoch: {} iter: {}/{} \t Loss: {:.6f}".format(k, start+i, end, loss.data[0]), end=" ")
+                    print("\t Time: %02d-%02d %02d:%02d:%02d"%(now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec))
                     
                     if(i%100==0):
                         check_str = "checkpoint_%02d.pt"%(k)
@@ -605,7 +609,7 @@ def train():
 
 def test():
     #checkpoint_pytorch = '/notebooks/vinet/vinet_v1_01.pt'
-    checkpoint_pytorch = '/notebooks/vinet/backup/checkpoint_9.pt'
+    checkpoint_pytorch = '/notebooks/vinet/backup/checkpoint_05.pt'
     if os.path.isfile(checkpoint_pytorch):
         checkpoint = torch.load(checkpoint_pytorch,\
                             map_location=lambda storage, loc: storage.cuda(0))
@@ -615,15 +619,17 @@ def test():
     
     batch = 1
     timesteps = 4
-    start = 5
     imu_seq_len = 5
+    datapath = "V2_01_easy"
+    mydataset = MyDataset('/notebooks/data/', datapath, batch, timesteps, imu_seq_len)
+    start = 5
+    end = len(mydataset)-(timesteps*batch)
+    step = timesteps-1
+
     model = Vinet()
     model.load_state_dict(checkpoint)  
     model.cuda()
     model.eval()
-    
-    datapath = "V2_01_easy"
-    mydataset = MyDataset('/notebooks/data/', datapath, batch, timesteps, img_seq_len)
     
     err = 0
     err2 = 0
@@ -632,7 +638,7 @@ def test():
 
     init_SE3 = None
    
-    for i in range(start, len(mydataset), timesteps-1): 
+    for i in range(start, end, step): 
         img, imu, init_SE3, target_f2f, target_global = mydataset.load_img_bat(i)
         img, imu, init_SE3, target_f2f, target_global = img.cuda(), imu.cuda(), init_SE3.cuda(), target_f2f.cuda(), target_global.cuda()
             
@@ -650,7 +656,7 @@ def test():
         err2 += float(((target_global.cpu().data.numpy() - composed_SE3.cpu().data.numpy()) ** 2).mean()) # mean((x-X)^2)
         #print(err2)
         
-        print(err, "\t", err2)
+        print("idx {}| Rel Err: {:.8f} \t Abs Err: {:.8f}".format(i+start, err, err2))
         
 	    ## Convert se3(v1, v2, v3, v4, v5, v6) -> xyzQ
         ## TODO Processing batch : implements
@@ -659,8 +665,8 @@ def test():
         ##ans.append(xyzq)
         #print('{}/{}'.format(str(i+1), str(len(mydataset)-1)) )
 
-    print('Final err = {}'.format(err/(len(mydataset)-1)))  
-    print('Final err2 = {}'.format(err2/(len(mydataset)-1)))  
+    print('Total Rel err = {}'.format(err/(len(mydataset)-1)))  
+    print('Total Abs err2 = {}'.format(err2/(len(mydataset)-1)))  
     
     #trajectoryAbs = mydataset.getTrajectoryAbsAll()
     #print(trajectoryAbs[0])
@@ -681,9 +687,9 @@ def test():
 
     
 def main():
-    train()
+    #train()
           
-    #test()
+    test()
 
 
 if __name__ == '__main__':
