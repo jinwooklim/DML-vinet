@@ -394,7 +394,8 @@ class MyDataset():
             batch_y2.append(y2)
             
             ## Increase idx
-            #print("y. idx+1: %s, idx+timesteps: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps, idx+self.timesteps))
+            #print("y. idx+1: %s, idx+timesteps: %s"%(idx+1, idx+self.timesteps))
+            #print("y2. idx+timesteps: %s"%(idx+self.timesteps))
             idx = idx + 1
 
         batch_init_SE3 = np.array(batch_init_SE3)
@@ -418,6 +419,7 @@ class MyDataset():
         #batch_y2 = np.expand_dims(batch_y2, axis=3) # (batch, 7)
         Y2 = Variable(torch.from_numpy(batch_y2).type(torch.FloatTensor).cuda())
         Y2 = Y2.view(self.batch, 7, 1)
+        #Y2 = Y2.view(self.batch, 1, 7, 1)
         
         #print(X.shape)
         #print(X2.shape)
@@ -496,11 +498,11 @@ class Vinet(nn.Module):
         se3 = se3.view(batch_size, timesteps, 6, 1)
         last_se3 = self.linear2(l_out1[:, -1, :])
         last_se3 = last_se3.view(batch_size, 6, 1)
-
+        
         ## SE3 Composition layer
+        ## TODO Version 1.
         ''' 
         batch_composed_SE3 = []
-        in_se3 = None
         for b in range(batch_size):
             if(b==0):
                 in_SE3 = init_SE3[b, ...]
@@ -513,15 +515,33 @@ class Vinet(nn.Module):
         #print("composed_SE3 : ", batch_composed_SE3.shape)
         '''
         
-        ## SE3 Composition layer
+        ## TODO Version 2.
+        '''
         in_SE3 = init_SE3 # (batch, 7, 1), from dataset
         composed_SE3 = self.SE3layer(in_SE3, last_se3.data.cpu()) # (batch, 7, 1) , (batch, 6 , 1)-> from main LSTM stream
-
         #print("last_se3 : ", last_se3.shape)
         #print("composed_SE3 : ", composed_SE3.shape)
+        '''
 
-        return se3, composed_SE3
-    
+        ## TODO Version 3.
+        batch_last_composed_SE3 = []
+        for b in range(batch_size):
+            for t in range(timesteps):
+                if(t==0):
+                    in_SE3 = init_SE3[b, ...] # init_SE3 == (7, 1)
+                    in_SE3 = in_SE3.view(1, 7, 1)
+                    temp_se3 = se3.data.cpu()[b, t, ...]
+                    temp_se3 = temp_se3.view(1, 6, 1)
+                    in_SE3 = self.SE3layer(in_SE3, temp_se3)
+                else:
+                    temp_se3 = se3.data.cpu()[b, t, ...]
+                    temp_se3 = temp_se3.view(1, 6, 1)
+                    in_SE3 = self.SE3layer(in_SE3, temp_se3)
+            batch_last_composed_SE3.append(in_SE3)
+        batch_last_composed_SE3 = torch.stack(batch_last_composed_SE3)
+        batch_last_composed_SE3 = batch_last_composed_SE3.view(batch_size, 7, 1) 
+        return se3, batch_last_composed_SE3
+        
     
 def model_out_to_flow_png(output):
     out_np = output[0].data.cpu().numpy()
