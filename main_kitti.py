@@ -551,9 +551,9 @@ def train():
     model = Vinet()
     model.train()     
     
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     #optimizer = optim.Adam(model.parameters(), lr = 0.001, weight_decay=0.1)
-    #optimizer = optim.Adam(model.parameters(), lr = 0.001)
+    optimizer = optim.Adam(model.parameters(), lr = 0.01, weight_decay=0.1)
     
     #criterion  = nn.MSELoss(size_average=False)
     criterion  = nn.MSELoss()   
